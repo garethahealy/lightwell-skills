@@ -1,0 +1,3 @@
+# Consumer-style secrets if copied into this plugin repo by mistake
+/scripts/
+.m2/

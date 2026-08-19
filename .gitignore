@@ -1,0 +1,9 @@
+.idea/*
+.vscode/*
+
+__pycache__/
+*.py[cod]
+
+# Consumer-style secrets / Maven local repo if copied here by mistake
+/scripts/
+.m2/
