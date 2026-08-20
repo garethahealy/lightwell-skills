@@ -1,0 +1,13 @@
+---
+description: Project overview and conventions for lightwell-skills
+alwaysApply: true
+---
+
+# Project Overview
+
+This repository is the **lightwell** Cursor plugin (shareable AI skills) for
+upgrading Red Hat Lightwell Maven projects. It is not a Maven playground and
+not a clone-to-consume project skill.
+
+Skills live under `plugins/lightwell/skills/`. They run against a **consumer**
+workspace that has `pom.xml`. This plugin repo has no application `pom.xml`.

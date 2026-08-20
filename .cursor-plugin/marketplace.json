@@ -1,0 +1,17 @@
+{
+  "name": "lightwell-skills",
+  "owner": {
+    "name": "Gareth Healy"
+  },
+  "metadata": {
+    "description": "Red Hat Lightwell / Trusted Packages — Maven upgrades, attestations, and Renovate OSV comments",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "lightwell",
+      "source": "./plugins/lightwell",
+      "description": "Red Hat Lightwell / Trusted Packages — Maven upgrades, attestations, and Renovate OSV comments"
+    }
+  ]
+}

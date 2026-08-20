@@ -1,0 +1,5 @@
+# Test / lint only. Plugin scripts stay stdlib-only.
+pytest
+pytest-cov
+ruff
+mypy

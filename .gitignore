@@ -3,6 +3,10 @@
 
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.venv/
+.coverage
+htmlcov/
 
 # Consumer-style secrets / Maven local repo if copied here by mistake
 /scripts/

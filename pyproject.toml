@@ -1,0 +1,55 @@
+[project]
+name = "lightwell-skills"
+version = "1.0.0"
+description = "Cursor plugin tests and lint for Red Hat Lightwell skills"
+requires-python = ">=3.14"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["plugins/lightwell/skills/lightwell-shared/scripts"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--cov=plugins/lightwell/skills/lightwell-shared/scripts/lightwell_shared",
+    "--cov-report=term-missing",
+]
+markers = [
+    "live: hits the Lightwell demo catalog (network, LIGHTWELL_*, mvn)",
+]
+
+[tool.coverage.run]
+branch = true
+omit = ["*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+target-version = "py314"
+src = ["plugins/lightwell/skills/lightwell-shared/scripts", "tests"]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "W"]
+ignore = ["UP047"]
+
+[tool.ruff.lint.per-file-ignores]
+"plugins/lightwell/skills/*/scripts/*.py" = ["E402"]
+"plugins/lightwell/skills/lightwell-shared/scripts/*.py" = ["E402"]
+"tests/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.14"
+mypy_path = "plugins/lightwell/skills/lightwell-shared/scripts"
+packages = ["lightwell_shared"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+explicit_package_bases = true

@@ -1,0 +1,10 @@
+tmp.lightwell:coverage-fixture:jar:0.0.0
++- org.json:json:jar:20220320:compile
++- commons-fileupload:commons-fileupload:jar:1.5:compile
+|  +- commons-io:commons-io:jar:2.11.0:compile
+|  \- org.apache.commons:commons-lang3:jar:3.12.0:compile
++- com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:jar:2.19.4:compile
+|  \- org.yaml:snakeyaml:jar:2.0:compile
++- junit:junit:jar:4.13.2:test
+|  \- org.hamcrest:hamcrest-core:jar:1.3:test
+\- org.example:plain:jar:1.0.0:compile

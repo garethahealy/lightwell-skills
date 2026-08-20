@@ -1,0 +1,22 @@
+{
+  "id": "RHSA-TEST-1",
+  "aliases": ["CVE-2023-0001"],
+  "summary": "Test advisory for json",
+  "affected": [
+    {
+      "package": {
+        "name": "org.json:json",
+        "purl": "pkg:maven/org.json/json@20220320"
+      },
+      "ranges": [
+        {
+          "type": "ECOSYSTEM",
+          "events": [
+            {"introduced": "0"},
+            {"fixed": "20220320.0.0.rhlw-00003"}
+          ]
+        }
+      ]
+    }
+  ]
+}

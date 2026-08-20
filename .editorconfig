@@ -9,5 +9,14 @@ trim_trailing_whitespace = true
 [*.{yml,yaml,json}]
 indent_size = 2
 
+# indent_size is for editors. editorconfig-checker skips IndentSize (.ecrc)
+# because Python embeds Maven trees (3-space prefixes) and XML (2-space).
+[*.py]
+indent_style = space
+indent_size = 4
+
 [*.md]
 trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
