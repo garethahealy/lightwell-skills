@@ -16,7 +16,7 @@ repos:
         args: [--fix]
       - id: ruff-format
   - repo: https://github.com/editorconfig-checker/editorconfig-checker
-    rev: v3.11.1
+    rev: v3.11.3
     hooks:
       - id: editorconfig-checker
         alias: ec
