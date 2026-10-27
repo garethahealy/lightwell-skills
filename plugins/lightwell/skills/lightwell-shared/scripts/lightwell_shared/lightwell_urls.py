@@ -1,17 +1,17 @@
-"""Canonical packages.redhat.com content URLs for the Lightwell demo catalog.
+"""Canonical packages.redhat.com content URLs for the Lightwell catalog.
 
-Demo console: https://console.redhat.com/lightwell/demo
-Content root: …/api/pulp-content/public-lightwell-demo/
+Console: https://console.redhat.com/lightwell
+Content root: …/api/pulp-content/lightwell/
 """
 
 from __future__ import annotations
 
 import os
 
-# Override for non-demo environments (trailing slash optional).
+# Override content root (trailing slash optional).
 CONTENT_ROOT = os.environ.get(
     "LIGHTWELL_CONTENT_ROOT",
-    "https://packages.redhat.com/api/pulp-content/public-lightwell-demo",
+    "https://packages.redhat.com/api/pulp-content/lightwell",
 ).rstrip("/")
 
 SOURCE_URL = {
@@ -36,4 +36,16 @@ def provenance_bundle_url(catalog: str, group_id: str, artifact_id: str, version
     """URL for `{artifact}-{version}.provenance.sigstore.json`."""
     group_path = group_id.replace(".", "/")
     name = f"{artifact_id}-{version}.provenance.sigstore.json"
+    return f"{java_catalog_base(catalog)}{group_path}/{artifact_id}/{version}/{name}"
+
+
+def sbom_filename(artifact_id: str, version: str) -> str:
+    """`{artifactId}-{version}.cyclonedx.json` next to the jar."""
+    return f"{artifact_id}-{version}.cyclonedx.json"
+
+
+def sbom_url(catalog: str, group_id: str, artifact_id: str, version: str) -> str:
+    """URL for `{artifactId}-{version}.cyclonedx.json` next to the jar."""
+    group_path = group_id.replace(".", "/")
+    name = sbom_filename(artifact_id, version)
     return f"{java_catalog_base(catalog)}{group_path}/{artifact_id}/{version}/{name}"

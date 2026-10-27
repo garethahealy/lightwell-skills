@@ -16,6 +16,7 @@ Find transitive deps with Lightwell **remediated** `.rhlw-*` fixes and
 **Scope:** remediated transitives only. Direct bumps:
 [upgrade-directs](../upgrade-directs/SKILL.md).
 Provenance: [verify-attestations](../verify-attestations/SKILL.md).
+CycloneDX hashes: [verify-sboms](../verify-sboms/SKILL.md).
 
 Run **after** directs are applied/built so `dependency:tree` matches the target
 graph.

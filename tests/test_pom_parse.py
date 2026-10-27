@@ -14,8 +14,8 @@ from lightwell_shared.pom_lib import (
 
 
 def test_infer_catalog() -> None:
-    rem = "https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/remediated/"
-    val = "https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/validated/"
+    rem = "https://packages.redhat.com/api/pulp-content/lightwell/java/remediated/"
+    val = "https://packages.redhat.com/api/pulp-content/lightwell/java/validated/"
     assert infer_catalog("1.0.0", rem) == "remediated"
     assert infer_catalog("1.0.0", val) == "validated"
     assert infer_catalog("1.0.0.rhlw-00001", None) == "remediated"

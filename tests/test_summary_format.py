@@ -13,7 +13,7 @@ from lightwell_shared.transitives_summary import select_osv as select_osv_transi
 
 OSV_LINE = (
     "org.json:json|CVE-2023-0001|boom pipe|fixed=20220320.0.0.rhlw-00003|"
-    "osv=https://packages.redhat.com/api/pulp-content/public-lightwell-demo/"
+    "osv=https://packages.redhat.com/api/pulp-content/lightwell/"
     "osv/java/remediated/RHSA-TEST-1.json"
 )
 
@@ -35,7 +35,7 @@ def test_format_osv_table_and_comment() -> None:
     body = format_osv_comment_body([OSV_LINE], marker="<!-- lightwell-osv-summary -->")
     assert body.startswith("<!-- lightwell-osv-summary -->")
     assert "Lightwell OSV advisories" in body
-    assert "public-lightwell-demo/osv/java/remediated" in body
+    assert "lightwell/osv/java/remediated" in body
 
 
 def test_build_footer() -> None:

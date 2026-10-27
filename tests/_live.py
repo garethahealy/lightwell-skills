@@ -1,4 +1,4 @@
-"""Live Lightwell demo catalog helpers. Never prints credentials."""
+"""Live Lightwell catalog helpers. Never prints credentials."""
 
 from __future__ import annotations
 
@@ -70,13 +70,13 @@ def write_maven_settings(dest: Path, *, local_repo: Path) -> Path:
       <repositories>
         <repository>
           <id>lightwell-remediated</id>
-          <url>https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/remediated/</url>
+          <url>https://packages.redhat.com/api/pulp-content/lightwell/java/remediated/</url>
           <releases><enabled>true</enabled></releases>
           <snapshots><enabled>false</enabled></snapshots>
         </repository>
         <repository>
           <id>lightwell-validated</id>
-          <url>https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/validated/</url>
+          <url>https://packages.redhat.com/api/pulp-content/lightwell/java/validated/</url>
           <releases><enabled>true</enabled></releases>
           <snapshots><enabled>false</enabled></snapshots>
         </repository>

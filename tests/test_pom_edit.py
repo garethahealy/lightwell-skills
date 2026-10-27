@@ -19,7 +19,7 @@ SAMPLE = """\
 <?xml version="1.0"?>
 <project>
     <dependencies>
-        <!-- Source: https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/remediated/ -->
+        <!-- Source: https://packages.redhat.com/api/pulp-content/lightwell/java/remediated/ -->
         <dependency>
             <groupId>org.json</groupId>
             <artifactId>json</artifactId>
@@ -37,7 +37,7 @@ SAMPLE = """\
             </exclusions>
         </dependency>
         <!-- Transitive of commons-fileupload:commons-fileupload -->
-        <!-- Source: https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/remediated/ -->
+        <!-- Source: https://packages.redhat.com/api/pulp-content/lightwell/java/remediated/ -->
         <dependency>
             <groupId>commons-io</groupId>
             <artifactId>commons-io</artifactId>

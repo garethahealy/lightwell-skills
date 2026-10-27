@@ -1,7 +1,7 @@
 # lightwell-skills
 
 Shareable **Cursor plugin** (team marketplace / local install) for [Red Hat
-Lightwell](https://console.redhat.com/lightwell/demo) Maven work. It is not a
+Lightwell](https://console.redhat.com/lightwell) Maven work. It is not a
 Maven application and not a project skill you get by cloning this repo into a
 workspace.
 
@@ -15,6 +15,7 @@ Shared helpers (not a skill): [`lightwell-shared`](plugins/lightwell/skills/ligh
 | [`upgrade-directs`](plugins/lightwell/skills/upgrade-directs) | Bump direct `pom.xml` deps (plan → collect → apply → summary) |
 | [`upgrade-transitives`](plugins/lightwell/skills/upgrade-transitives) | Promote remediated transitive fixes (plan → collect → apply → summary) |
 | [`verify-attestations`](plugins/lightwell/skills/verify-attestations) | Cosign provenance check for Lightwell jars |
+| [`verify-sboms`](plugins/lightwell/skills/verify-sboms) | CycloneDX hash check against the local Maven repo |
 | [`add-osv-to-renovate`](plugins/lightwell/skills/add-osv-to-renovate) | Comment OSV data on Renovate PRs |
 
 ## Install locally (this clone)
@@ -27,9 +28,9 @@ ln -sfn "$(pwd)/plugins/lightwell" ~/.cursor/plugins/local/lightwell
 ```
 
 Then **Developer: Reload Window**. Open **Customize → Skills** and confirm
-`/upgrade-directs`, `/upgrade-transitives`, `/verify-attestations`, and
-`/add-osv-to-renovate` are listed. Type `/upgrade-directs` in Agent chat to
-run one.
+`/upgrade-directs`, `/upgrade-transitives`, `/verify-attestations`,
+`/verify-sboms`, and `/add-osv-to-renovate` are listed. Type `/upgrade-directs`
+in Agent chat to run one.
 
 The symlink is user-scoped. Skills always run against the **consumer** Maven
 workspace you have open (`pom.xml`), not against this plugin repository.
@@ -71,14 +72,14 @@ Skills parse a **single** `pom.xml` with regex (comments and indent preserved).
 They do not resolve parent POMs, BOMs / `dependencyManagement` as Maven does,
 profiles, or a multi-module reactor. `dependencyManagement` `<dependency>`
 blocks are currently treated like directs. Demo catalog:
-`public-lightwell-demo` on packages.redhat.com. Provenance bundles are not
+`lightwell` on packages.redhat.com. Provenance bundles are not
 published there yet (live cosign tests are skipped).
 
 **Runtime:** Python **3.14+** (CLIs exit 2 if older), Bash 5+, `jq`. Transitive
-plan/apply need Maven (`mvnd` or `mvn`). Attestations need `cosign`.
-Add-osv needs `gh`.
+plan/apply and SBOM checks need Maven (`mvnd` or `mvn`). Attestations need
+`cosign`. Add-osv needs `gh`.
 
-**Demo GAV** used by live tests: `org.json:json` at base `20220320` on
+**Live-test GAV:** `org.json:json` at base `20220320` on
 `java/remediated`.
 
 ## Tests
@@ -93,15 +94,14 @@ python3 -m venv .venv
 python3 -m pip install -r requirements-dev.txt   # pytest, ruff, mypy
 make lint
 make test-unit
-make test-live   # demo catalog; needs LIGHTWELL_* or scripts/_creds.sh
+make test-live   # live catalog; needs LIGHTWELL_* or scripts/_creds.sh
 make test        # unit + live
 ```
 
 Live catalog tests (`@pytest.mark.live`) hit packages.redhat.com and need
 `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN` (or `scripts/_creds.sh` via
 `_load-creds.sh`), network, and `mvn` on `PATH`. Plugin CI runs unit and live
-tests on every push. Provenance/cosign cases stay in the live module but are
-skipped until the demo catalog publishes bundles.
+tests on every push.
 
 Local **pre-commit** includes `rh-pre-commit`, which needs Red Hat VPN / login
 the first time. CI strips that hook. Ruff runs in both.

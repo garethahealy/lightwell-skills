@@ -11,8 +11,8 @@ from lightwell_shared.mvn_run import lightwell_download_lines, maven_argv, maven
 def test_lightwell_download_lines() -> None:
     log = """\
 Downloaded from central: https://repo.maven.apache.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar
-Downloaded from lightwell-remediated: https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/remediated/org/json/json/1/json-1.jar
-Downloaded from lightwell-validated: https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/validated/com/fasterxml/jackson/dataformat/jackson-dataformat-yaml/2.19.4/jackson-dataformat-yaml-2.19.4.jar
+Downloaded from lightwell-remediated: https://packages.redhat.com/api/pulp-content/lightwell/java/remediated/org/json/json/1/json-1.jar
+Downloaded from lightwell-validated: https://packages.redhat.com/api/pulp-content/lightwell/java/validated/com/fasterxml/jackson/dataformat/jackson-dataformat-yaml/2.19.4/jackson-dataformat-yaml-2.19.4.jar
 """
     lines = lightwell_download_lines(log)
     assert len(lines) == 2

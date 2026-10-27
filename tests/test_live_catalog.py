@@ -1,13 +1,14 @@
-"""Live tests against the Lightwell demo catalog and local Maven.
+"""Live tests against the Lightwell catalog and local Maven.
 
 Requires LIGHTWELL_USERNAME / LIGHTWELL_TOKEN, network, and Maven.
 Does not mock packages.redhat.com. Provenance/cosign cases stay in this
-module but are skipped until the demo catalog publishes bundles (no cosign
+module but are skipped until the live catalog publishes bundles (no cosign
 install in CI until then).
 """
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -25,7 +26,7 @@ from _live import (
 from lightwell_shared.directs_collect import collect_one
 from lightwell_shared.download_http import auth_get, download_to_path
 from lightwell_shared.fetch_osv import fetch_osv_lines_for_bumps
-from lightwell_shared.lightwell_urls import maven_metadata_url, provenance_bundle_url
+from lightwell_shared.lightwell_urls import maven_metadata_url, provenance_bundle_url, sbom_url
 from lightwell_shared.mvn_run import run_dependency_tree, run_mvn
 from lightwell_shared.pom_lib import indexes_by_via_direct
 from lightwell_shared.resolve_metadata import resolve_payload
@@ -33,7 +34,7 @@ from lightwell_shared.verify_attestations import extract_pubkey, verify_one
 
 pytestmark = pytest.mark.live
 
-_PROVENANCE_SKIP = pytest.mark.skip(reason="demo catalog does not publish provenance bundles yet")
+_PROVENANCE_SKIP = pytest.mark.skip(reason="live catalog does not publish provenance bundles yet")
 
 
 @pytest.fixture(scope="session")
@@ -120,7 +121,7 @@ def test_live_osv(lightwell_creds: tuple[str, str], json_ver: str) -> None:
         assert parts[0] == f"{DEMO_JSON_G}:{DEMO_JSON_A}"
         assert parts[3].startswith("fixed=")
         assert parts[4].startswith("osv=")
-        assert "public-lightwell-demo" in parts[4]
+        assert "pulp-content/lightwell" in parts[4]
 
 
 @_PROVENANCE_SKIP
@@ -153,6 +154,19 @@ def test_live_maven_tree(live_work: SimpleNamespace) -> None:
     by_via = indexes_by_via_direct(text)
     assert "commons-fileupload:commons-fileupload" in by_via
     assert "commons-io:commons-io" in by_via["commons-fileupload:commons-fileupload"]
+
+
+def test_live_sbom(lightwell_creds: tuple[str, str], json_ver: str, live_work: SimpleNamespace) -> None:
+    user, token = lightwell_creds
+    url = sbom_url("remediated", DEMO_JSON_G, DEMO_JSON_A, json_ver)
+    dest = live_work.root / "cyclonedx.json"
+    code = download_to_path(url, dest, user, token)
+    if code == 404:
+        pytest.skip("live catalog does not publish {artifact}-{version}.cyclonedx.json yet")
+    assert code == 200, code
+    assert dest.is_file() and dest.stat().st_size > 0
+    bom = json.loads(dest.read_text(encoding="utf-8"))
+    assert bom.get("bomFormat") == "CycloneDX"
 
 
 @_PROVENANCE_SKIP

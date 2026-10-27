@@ -2,7 +2,7 @@
   "name": "lightwell",
   "displayName": "Lightwell",
   "version": "1.0.0",
-  "description": "Red Hat Lightwell / Trusted Packages — upgrade Maven directs and transitives, verify attestations, and comment OSV on Renovate PRs",
+  "description": "Red Hat Lightwell / Trusted Packages — upgrade Maven directs and transitives, verify attestations and SBOMs, and comment OSV on Renovate PRs",
   "author": {
     "name": "Gareth Healy"
   },
@@ -15,6 +15,8 @@
     "redhat",
     "osv",
     "attestations",
+    "sbom",
+    "cyclonedx",
     "plugin"
   ]
 }

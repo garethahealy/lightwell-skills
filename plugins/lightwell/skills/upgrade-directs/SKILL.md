@@ -10,12 +10,14 @@ description: >-
 # Upgrade Directs
 
 Upgrade **direct** Maven dependencies in `pom.xml`. Prefer Red Hat Lightwell
-artifacts from the [Lightwell demo](https://console.redhat.com/lightwell/demo)
-catalogs on [packages.redhat.com](https://packages.redhat.com/).
+artifacts from the [Lightwell](https://console.redhat.com/lightwell)
+catalogs on [packages.redhat.com](https://packages.redhat.com/)
+(`…/api/pulp-content/lightwell`).
 
 **Scope:** direct deps only. For transitives use
 [upgrade-transitives](../upgrade-transitives/SKILL.md).
 For cosign provenance use [verify-attestations](../verify-attestations/SKILL.md).
+For CycloneDX hash checks use [verify-sboms](../verify-sboms/SKILL.md).
 
 **Agent contract (read first):**
 [upgrade-common.md](../lightwell-shared/upgrade-common.md)

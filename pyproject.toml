@@ -18,7 +18,7 @@ addopts = [
     "--cov-report=term-missing",
 ]
 markers = [
-    "live: hits the Lightwell demo catalog (network, LIGHTWELL_*, mvn)",
+    "live: hits the Lightwell catalog (network, LIGHTWELL_*, mvn)",
 ]
 
 [tool.coverage.run]

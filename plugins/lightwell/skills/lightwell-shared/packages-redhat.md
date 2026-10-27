@@ -8,6 +8,7 @@ Shared helpers and conventions for
 [upgrade-directs](../upgrade-directs/SKILL.md),
 [upgrade-transitives](../upgrade-transitives/SKILL.md),
 [verify-attestations](../verify-attestations/SKILL.md),
+[verify-sboms](../verify-sboms/SKILL.md),
 [add-osv-to-renovate](../add-osv-to-renovate/SKILL.md).
 
 Workflows live in those skills (plan → collect → apply → summary for upgrades).
@@ -20,10 +21,10 @@ Scripts live next to this file under `scripts/`. From a skill, set
 
 ## What Lightwell is
 
-[Lightwell demo](https://console.redhat.com/lightwell/demo) on
+[Lightwell](https://console.redhat.com/lightwell) on
 [packages.redhat.com](https://packages.redhat.com/) supplies remediated /
-validated packages via the public demo content root
-`/api/pulp-content/public-lightwell-demo/`. Resolved via the consumer repo's
+validated packages via the content root
+`/api/pulp-content/lightwell/`. Resolved via the consumer repo's
 `.m2/settings.xml` with `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`. Lightwell
 often **backports**
 fixes onto a pinned upstream line (`.rhlw-*`) instead of forcing a disruptive
@@ -53,24 +54,25 @@ echo "CREDS_OK"
 ## Runtime
 
 **Bash 5+**, **Python 3.14+** (CLIs exit 2 if older; same pin as plugin CI),
-**jq**. Transitive plan + apply need **Maven**.
-Attestations need **cosign**. Access: content URLs + disk cache — not pulp-cli /
-Pulp admin APIs. HTTPS via `http_pool.py` (metadata, OSV, provenance download)
-with `Cache-Control: no-cache` / `Pragma: no-cache`.
+**jq**. Transitive plan, apply, and SBOM checks need **Maven**.
+Attestations need **cosign**. SBOM checks hash files already in the local
+Maven repository. Access: content URLs + disk cache — not pulp-cli / Pulp
+admin APIs. HTTPS via `http_pool.py` (metadata, OSV, provenance, and SBOM
+download) with `Cache-Control: no-cache` / `Pragma: no-cache`.
 
 ## Catalogs
 
 | Catalog | Maven path | `Source:` URL | Settings id |
 |---------|------------|---------------|-------------|
-| Remediated | `api/pulp-content/public-lightwell-demo/java/remediated` | `https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/remediated/` | `lightwell-remediated` |
-| Validated | `api/pulp-content/public-lightwell-demo/java/validated` | `https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/validated/` | `lightwell-validated` |
+| Remediated | `api/pulp-content/lightwell/java/remediated` | `https://packages.redhat.com/api/pulp-content/lightwell/java/remediated/` | `lightwell-remediated` |
+| Validated | `api/pulp-content/lightwell/java/validated` | `https://packages.redhat.com/api/pulp-content/lightwell/java/validated/` | `lightwell-validated` |
 
 Do not open `.m2/settings.xml`.
 
 Metadata:
 
 ```text
-https://packages.redhat.com/api/pulp-content/public-lightwell-demo/java/{remediated|validated}/{groupPath}/{artifactId}/maven-metadata.xml
+https://packages.redhat.com/api/pulp-content/lightwell/java/{remediated|validated}/{groupPath}/{artifactId}/maven-metadata.xml
 ```
 
 `groupPath` = `groupId` with `.` → `/`.
@@ -93,14 +95,15 @@ Plan / collect / apply JSON includes `schemaVersion` (currently `1`).
 |------------------|------|
 | `_load-creds.sh` | Export Lightwell creds |
 | `_repo.sh` | Consumer repo root (creds file lookup) |
-| `lightwell_shared/` | Library: URLs, http_pool, metadata, OSV, pom, apply/summary, attest |
+| `lightwell_shared/` | Library: URLs, http_pool, metadata, OSV, pom, apply/summary, attest, sbom |
 | `resolve_metadata.py` | Metadata fetch/cache CLI shim |
 | `fetch_osv.py` | Remediated OSV fetch CLI shim (http_pool) |
-| `download_http.py` | Authenticated file / provenance download CLI shim |
+| `download_http.py` | Authenticated file / provenance / SBOM download CLI shim |
 | `format-osv-table.py` | Markdown table / PR comment from OSV lines |
 | `verify-attestations.sh` | Creds + `verify_attestations.py` (cosign SLSA) |
-| `coords_from_apply.py` | Apply JSON → attest stdin lines |
-| `coords_from_pom.py` | Lightwell pom deps → attest stdin lines |
+| `verify-sboms.sh` | Creds + `verify_sboms.py` (CycloneDX hashes) |
+| `coords_from_apply.py` | Apply JSON → attestation or SBOM stdin lines |
+| `coords_from_pom.py` | Lightwell pom deps → attestation or SBOM stdin lines |
 
 Skill scripts put this directory on `sys.path`, then `from lightwell_shared…`.
 
@@ -130,6 +133,7 @@ use HTTP `Expires` / `Cache-Control` for disk-cache decisions.
 | Natural trees | `lightwell-natural/` | TTL default **3600**; one Maven tree for all miss parents |
 | OSV | `lightwell-osv/` | Manifest TTL default **3600** + advisory checksums |
 | Provenance | `lightwell-provenance/` | Reuse bundle if present |
+| SBOM | `lightwell-sbom/` | Reuse `{artifactId}-{version}.cyclonedx.json` if present |
 
 Cold metadata Collect uses keep-alive pools + in-flight GET coalescing
 (`LIGHTWELL_HTTP_POOL_SIZE`, default 8) and `LIGHTWELL_METADATA_JOBS` (default
@@ -170,11 +174,43 @@ bash "$SHARED/verify-attestations.sh" --batch
 Provenance URL:
 
 ```text
-…/api/pulp-content/public-lightwell-demo/java/{catalog}/{groupPath}/{artifactId}/{version}/{artifactId}-{version}.provenance.sigstore.json
+…/api/pulp-content/lightwell/java/{catalog}/{groupPath}/{artifactId}/{version}/{artifactId}-{version}.provenance.sigstore.json
 ```
 
 Use `cosign verify-blob-attestation` (not `verify-blob`). See
 [verify-attestations](../verify-attestations/SKILL.md).
+
+## SBOMs
+
+From apply JSON (preferred after upgrade Apply). Re-run the directs Plan so
+versions match the updated pom:
+
+```bash
+python3 "$SKILL/../upgrade-directs/scripts/plan.py" \
+  --pom pom.xml -o /tmp/direct-plan.json
+python3 "$SHARED/coords_from_apply.py" \
+  --from-apply /tmp/direct-apply.json \
+| bash "$SHARED/verify-sboms.sh" --batch --from-plan /tmp/direct-plan.json
+```
+
+Or stdin coordinates with the same plan:
+
+```bash
+bash "$SHARED/verify-sboms.sh" --batch --from-plan /tmp/direct-plan.json
+```
+
+SBOM URL (same version directory as the jar):
+
+```text
+…/api/pulp-content/lightwell/java/{catalog}/{groupPath}/{artifactId}/{version}/{artifactId}-{version}.cyclonedx.json
+```
+
+Use the upgrade-directs plan (`dependencies[]`), then compare SHA-256 only for
+main JARs (no classifier) that appear in both that plan and the CycloneDX
+SBOM. Skip a JAR that is not in the local Maven repository, and skip a
+component with no SHA-256. The only package failure is Status `mismatch`.
+Stdout is a markdown table with the SBOM SHA-256 and the local SHA-256. See
+[verify-sboms](../verify-sboms/SKILL.md).
 
 ## OSV
 
