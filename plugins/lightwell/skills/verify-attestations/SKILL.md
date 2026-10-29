@@ -9,7 +9,9 @@ description: >-
 # Verify Attestations
 
 Verify **local Maven repo jars** against sibling `.provenance.sigstore.json`
-bundles via `cosign verify-blob-attestation`. Does not edit `pom.xml`.
+bundles via `cosign verify-blob-attestation` and the shipped PNC key
+[pnc-provenance-signing-key-1.pub](../lightwell-shared/pnc-provenance-signing-key-1.pub).
+Does not edit `pom.xml`.
 
 Pair with [upgrade-directs](../upgrade-directs/SKILL.md) /
 [upgrade-transitives](../upgrade-transitives/SKILL.md) after a successful
@@ -55,6 +57,7 @@ lines as-is. Workers: `LIGHTWELL_ATTEST_JOBS` (default 8).
 ## Do not
 
 - Diagnose why a jar is missing or why cosign failed
-- Invent public keys (helper extracts from Rekor in the bundle)
+- Extract a public key from the bundle or use any key other than
+  `pnc-provenance-signing-key-1.pub`
 - Use `cosign verify-blob` instead of `verify-blob-attestation`
 - Continue after `AUTH_FAILED` / HTTP 403

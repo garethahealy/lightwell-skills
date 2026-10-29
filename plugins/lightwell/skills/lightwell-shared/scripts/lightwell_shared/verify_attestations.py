@@ -1,7 +1,8 @@
 """Verify Lightwell jars against SLSA provenance (cosign).
 
-Downloads provenance bundles via http_pool (download_http), extracts the
-Rekor public key, and runs cosign verify-blob-attestation.
+Downloads provenance bundles via http_pool (download_http) and runs
+cosign verify-blob-attestation with the shipped PNC key
+``pnc-provenance-signing-key-1.pub``.
 
 Usage:
   verify_attestations.py remediated org.json json 1.0.0.rhlw-00001
@@ -13,8 +14,6 @@ Never prints credentials. Requires Python 3.14+, cosign, Maven.
 from __future__ import annotations
 
 import argparse
-import base64
-import json
 import os
 import shutil
 import subprocess
@@ -39,18 +38,16 @@ def provenance_cache_root(*, no_cache: bool) -> Path | None:
     return Path(xdg) / "lightwell-provenance"
 
 
-def extract_pubkey(bundle: Path, out: Path) -> bool:
-    try:
-        data = json.loads(bundle.read_text(encoding="utf-8"))
-        body_b64 = data["verificationMaterial"]["tlogEntries"][0]["canonicalizedBody"]
-        body = json.loads(base64.b64decode(body_b64))
-        key_b64 = body["spec"]["signatures"][0]["verifier"]
-        pem = base64.b64decode(key_b64)
-        out.write_bytes(pem)
-    except KeyError, IndexError, TypeError, ValueError, json.JSONDecodeError, OSError:
+def signing_key_path() -> Path:
+    """PNC provenance signing key shipped next to the lightwell-shared skill files."""
+    return Path(__file__).resolve().parents[2] / "pnc-provenance-signing-key-1.pub"
+
+
+def signing_key_ready(path: Path) -> bool:
+    if not path.is_file():
         return False
-    text = out.read_text(encoding="utf-8", errors="replace")
-    return "BEGIN PUBLIC KEY" in text and out.stat().st_size > 0
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return "BEGIN PUBLIC KEY" in text and "END PUBLIC KEY" in text
 
 
 def verify_one(
@@ -75,9 +72,10 @@ def verify_one(
     jar_name = f"{artifact_id}-{version}.jar"
     prov_name = f"{artifact_id}-{version}.provenance.sigstore.json"
     jar = local_repo / group_path / artifact_id / version / jar_name
-    work = work_root / f"{catalog}__{group_path.replace('/', '_')}__{artifact_id}__{version}"
-    work.mkdir(parents=True, exist_ok=True)
-    pubkey = work / "lightwell.pub"
+    pubkey = signing_key_path()
+    if not signing_key_ready(pubkey):
+        print(f"KEY_MISSING: {pubkey}", file=sys.stderr)
+        return f"FAIL {catalog} {gav} reason=key-missing", False
 
     if not jar.is_file():
         print(f"JAR_MISSING: {jar}", file=sys.stderr)
@@ -88,6 +86,8 @@ def verify_one(
         cached_dir.mkdir(parents=True, exist_ok=True)
         bundle = cached_dir / prov_name
     else:
+        work = work_root / f"{catalog}__{group_path.replace('/', '_')}__{artifact_id}__{version}"
+        work.mkdir(parents=True, exist_ok=True)
         bundle = work / prov_name
 
     if not bundle.is_file() or bundle.stat().st_size == 0:
@@ -101,10 +101,6 @@ def verify_one(
             return f"FAIL {catalog} {gav} reason=provenance-download", False
     elif verbose:
         print(f"Provenance cache hit {catalog} {gav}", file=sys.stderr)
-
-    if not extract_pubkey(bundle, pubkey):
-        print(f"KEY_EXTRACT_FAILED: {catalog} {gav}", file=sys.stderr)
-        return f"FAIL {catalog} {gav} reason=key-extract", False
 
     if verbose:
         print(f"cosign verify-blob-attestation {jar_name}", file=sys.stderr)
@@ -182,6 +178,10 @@ def main() -> int:
         return 1
     if not shutil.which(maven_binary()):
         print(f"error: mvn or mvnd is required (got: {maven_binary()})", file=sys.stderr)
+        return 1
+    pubkey = signing_key_path()
+    if not signing_key_ready(pubkey):
+        print(f"error: signing key not found: {pubkey}", file=sys.stderr)
         return 1
 
     username = os.environ.get("LIGHTWELL_USERNAME", "")

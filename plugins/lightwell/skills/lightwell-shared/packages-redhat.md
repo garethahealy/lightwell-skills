@@ -177,7 +177,8 @@ Provenance URL:
 …/api/pulp-content/lightwell/java/{catalog}/{groupPath}/{artifactId}/{version}/{artifactId}-{version}.provenance.sigstore.json
 ```
 
-Use `cosign verify-blob-attestation` (not `verify-blob`). See
+Use `cosign verify-blob-attestation` (not `verify-blob`) with the shipped key
+`pnc-provenance-signing-key-1.pub`. See
 [verify-attestations](../verify-attestations/SKILL.md).
 
 ## SBOMs

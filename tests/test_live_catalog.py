@@ -30,7 +30,7 @@ from lightwell_shared.lightwell_urls import maven_metadata_url, provenance_bundl
 from lightwell_shared.mvn_run import run_dependency_tree, run_mvn
 from lightwell_shared.pom_lib import indexes_by_via_direct
 from lightwell_shared.resolve_metadata import resolve_payload
-from lightwell_shared.verify_attestations import extract_pubkey, verify_one
+from lightwell_shared.verify_attestations import verify_one
 
 pytestmark = pytest.mark.live
 
@@ -125,15 +125,13 @@ def test_live_osv(lightwell_creds: tuple[str, str], json_ver: str) -> None:
 
 
 @_PROVENANCE_SKIP
-def test_live_provenance_key(lightwell_creds: tuple[str, str], json_ver: str, live_work: SimpleNamespace) -> None:
+def test_live_provenance_bundle(lightwell_creds: tuple[str, str], json_ver: str, live_work: SimpleNamespace) -> None:
     user, token = lightwell_creds
     url = provenance_bundle_url("remediated", DEMO_JSON_G, DEMO_JSON_A, json_ver)
     bundle = live_work.root / f"{DEMO_JSON_A}-{json_ver}.provenance.sigstore.json"
     code = download_to_path(url, bundle, user, token)
     assert code == 200, code
     assert bundle.is_file() and bundle.stat().st_size > 0
-    pubkey = live_work.root / "lightwell.pub"
-    assert extract_pubkey(bundle, pubkey)
 
 
 def test_live_maven_tree(live_work: SimpleNamespace) -> None:
