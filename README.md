@@ -71,13 +71,13 @@ the plugin package.
 
 Repository downloads (jars, provenance, SBOMs) use the
 [Red Hat terms-based registry](https://access.redhat.com/terms-based-registry/)
-with `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`. See 
+with `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`. See
 [Create a Red Hat Lightwell Network service account](https://docs.redhat.com/en/documentation/lightwell_network/current/get_started-create_a_red_hat_lightwell_network_service_account).
 
 Lightwell API calls (version lists and advisories) use a
 [service account](https://console.redhat.com/iam/service-accounts):
 `LIGHTWELL_CLIENT_ID` / `LIGHTWELL_CLIENT_SECRET`. The client exchanges those
-for an access token. See 
+for an access token. See
 [Get started with Lightwell Network API access](https://docs.redhat.com/en/documentation/lightwell_network/current/get_started-lightwell_network_api_access#reference_1__section_1).
 
 ## Limitations
