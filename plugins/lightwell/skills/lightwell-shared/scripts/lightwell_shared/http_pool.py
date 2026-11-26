@@ -1,4 +1,4 @@
-"""Pooled HTTPS client (stdlib) for Lightwell metadata fetches.
+"""Pooled HTTPS client (stdlib) for the Lightwell API, SSO, and repository downloads.
 
 Keeps keep-alive connections per host across ThreadPool workers, follows
 redirects (packages.redhat.com → CDN), and coalesces in-flight GETs for the
@@ -124,10 +124,11 @@ class HttpsPool:
         *,
         headers: dict[str, str],
         method: str = "GET",
+        body: bytes | None = None,
     ) -> tuple[int, str, dict[str, str]]:
         """Return (status, body, headers). Follows redirects. Coalesces identical GETs."""
-        if method.upper() != "GET":
-            return self._request_uncached(url, headers=headers, method=method)
+        if method.upper() != "GET" or body is not None:
+            return self._request_uncached(url, headers=headers, method=method, body=body)
 
         with self._inflight_lock:
             existing = self._inflight.get(url)
@@ -161,7 +162,7 @@ class HttpsPool:
                         self._inflight_waiters[url] = left
 
         try:
-            result = self._request_uncached(url, headers=headers, method=method)
+            result = self._request_uncached(url, headers=headers, method=method, body=body)
             with self._inflight_lock:
                 self._inflight_results[url] = result
             return result
@@ -184,11 +185,13 @@ class HttpsPool:
         *,
         headers: dict[str, str],
         method: str,
+        body: bytes | None = None,
     ) -> tuple[int, str, dict[str, str]]:
         current = url
-        # Auth / conditional headers only on the first hop (origin); CDN signed
-        # URLs should not get Basic auth re-sent in a way that breaks signatures.
+        # Authorization and the request body only on the first hop.
+        # CDN redirects must not receive them.
         first_headers = dict(headers)
+        payload = body
 
         for _ in range(self.max_redirects + 1):
             parsed = urlparse(current)
@@ -206,12 +209,12 @@ class HttpsPool:
             conn = pool.acquire()
             discard = False
             try:
-                conn.request(method.upper(), path, headers=first_headers)
+                conn.request(method.upper(), path, body=payload, headers=first_headers)
                 resp = conn.getresponse()
                 status = int(resp.status)
                 raw = resp.read()
                 resp_headers = {k: v for k, v in resp.getheaders()}
-                body = raw.decode("utf-8", errors="replace")
+                text = raw.decode("utf-8", errors="replace")
                 conn_hdr = (resp_headers.get("Connection") or resp_headers.get("connection") or "").lower()
                 if conn_hdr == "close" or status >= 500 or status in {401, 403}:
                     discard = True
@@ -221,11 +224,16 @@ class HttpsPool:
                     if not loc:
                         raise HttpFetchError(f"redirect without Location: HTTP {status}")
                     current = urljoin(current, loc)
-                    # Subsequent hops: drop Authorization (CDN / signed URLs)
-                    first_headers = {k: v for k, v in first_headers.items() if k.lower() not in {"authorization"}}
+                    # Subsequent hops: drop Authorization and the body (CDN / signed URLs).
+                    payload = None
+                    first_headers = {
+                        k: v
+                        for k, v in first_headers.items()
+                        if k.lower() not in {"authorization", "content-type", "content-length"}
+                    }
                     continue
 
-                return status, body, resp_headers
+                return status, text, resp_headers
             except (OSError, http.client.HTTPException) as exc:
                 discard = True
                 raise HttpFetchError(str(exc)) from exc

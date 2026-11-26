@@ -55,19 +55,20 @@ def test_match_lines_skip_other_packages_and_already_fixed() -> None:
 def test_fetch_uses_cache(tmp_path: Path, monkeypatch) -> None:
     calls = {"n": 0}
 
-    def fake(group_id: str, artifact_id: str, username: str, token: str) -> list[dict]:
-        del username, token
+    def fake(group_id: str, artifact_id: str) -> list[dict]:
         calls["n"] += 1
         assert (group_id, artifact_id) == ("org.json", "json")
         return [_ADVISORY]
 
     monkeypatch.setenv("LIGHTWELL_OSV_CACHE_DIR", str(tmp_path))
     monkeypatch.setenv("LIGHTWELL_OSV_CACHE_TTL", "3600")
+    monkeypatch.setenv("LIGHTWELL_CLIENT_ID", "client-id")
+    monkeypatch.setenv("LIGHTWELL_CLIENT_SECRET", "client-secret")
     monkeypatch.delenv("LIGHTWELL_OSV_NO_CACHE", raising=False)
     monkeypatch.setattr("lightwell_shared.fetch_osv.list_advisories", fake)
     bumps = [("org.json", "json", "20220320", "20220320.0.0.rhlw-00003")]
-    first = fetch_osv_lines_for_bumps(bumps, username="user", token="tok")
-    second = fetch_osv_lines_for_bumps(bumps, username="user", token="tok")
+    first = fetch_osv_lines_for_bumps(bumps)
+    second = fetch_osv_lines_for_bumps(bumps)
     assert first == second
     assert calls["n"] == 1
     assert "pulp-content/lightwell" in first[0]

@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from lightwell_shared.download_http import HttpAuthError, header_value
-
-
-def test_header_value_case() -> None:
-    assert header_value({"ETag": '"abc"'}, "etag") == '"abc"'
-    assert header_value({"etag": "x"}, "ETag") == "x"
+from lightwell_shared.download_http import HttpAuthError
 
 
 def test_auth_error_message() -> None:

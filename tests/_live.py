@@ -17,8 +17,12 @@ DEMO_JSON_BASE = "20220320"
 def require_lightwell_creds() -> tuple[str, str]:
     user = os.environ.get("LIGHTWELL_USERNAME", "").strip()
     token = os.environ.get("LIGHTWELL_TOKEN", "").strip()
+    client_id = os.environ.get("LIGHTWELL_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("LIGHTWELL_CLIENT_SECRET", "").strip()
     if not user or not token:
         raise RuntimeError("LIGHTWELL_USERNAME and LIGHTWELL_TOKEN required for demo-catalog tests")
+    if not client_id or not client_secret:
+        raise RuntimeError("LIGHTWELL_CLIENT_ID and LIGHTWELL_CLIENT_SECRET required for Lightwell API tests")
     return user, token
 
 

@@ -37,12 +37,59 @@ def test_load_creds_from_env_skips_file() -> None:
         env={
             "LIGHTWELL_USERNAME": "from-env",
             "LIGHTWELL_TOKEN": "from-env-token",
+            "LIGHTWELL_CLIENT_ID": "from-env-client",
+            "LIGHTWELL_CLIENT_SECRET": "from-env-client-secret",
         },
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "CREDS_OK"
     assert "from-env-token" not in proc.stdout
     assert "from-env-token" not in proc.stderr
+    assert "from-env-client-secret" not in proc.stdout
+    assert "from-env-client-secret" not in proc.stderr
+
+
+def test_load_creds_partial_env_does_not_skip_file(tmp_path: Path) -> None:
+    load = SHARED_SCRIPTS / "_load-creds.sh"
+    proc = _bash(
+        f'source "{load}"',
+        cwd=tmp_path,
+        env={
+            "LIGHTWELL_USERNAME": "from-env",
+            "LIGHTWELL_TOKEN": "from-env-token",
+            "LIGHTWELL_CLIENT_ID": "",
+            "LIGHTWELL_CLIENT_SECRET": "",
+        },
+    )
+    assert proc.returncode == 1
+    assert "CREDS_FILE_MISSING" in proc.stderr
+    assert "from-env-token" not in proc.stdout
+    assert "from-env-token" not in proc.stderr
+
+
+def test_load_creds_file_requires_client_credentials(tmp_path: Path) -> None:
+    (tmp_path / "pom.xml").write_text("<project/>\n", encoding="utf-8")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "_creds.sh").write_text(
+        "LIGHTWELL_USERNAME=fixture-user\nLIGHTWELL_TOKEN=fixture-token\n",
+        encoding="utf-8",
+    )
+    load = SHARED_SCRIPTS / "_load-creds.sh"
+    proc = _bash(
+        f'source "{load}"',
+        cwd=tmp_path,
+        env={
+            "LIGHTWELL_USERNAME": "",
+            "LIGHTWELL_TOKEN": "",
+            "LIGHTWELL_CLIENT_ID": "",
+            "LIGHTWELL_CLIENT_SECRET": "",
+            "GIT_DIR": str(tmp_path / ".not-a-git-dir"),
+        },
+    )
+    assert proc.returncode == 1
+    assert "CREDS_MISSING" in proc.stderr
+    assert "fixture-token" not in proc.stdout
+    assert "fixture-token" not in proc.stderr
 
 
 def test_load_creds_missing_file(tmp_path: Path) -> None:
@@ -50,7 +97,7 @@ def test_load_creds_missing_file(tmp_path: Path) -> None:
     proc = _bash(
         f'source "{load}"',
         cwd=tmp_path,
-        env={"LIGHTWELL_USERNAME": "", "LIGHTWELL_TOKEN": ""},
+        env={"LIGHTWELL_USERNAME": "", "LIGHTWELL_TOKEN": "", "LIGHTWELL_CLIENT_ID": "", "LIGHTWELL_CLIENT_SECRET": ""},
     )
     assert proc.returncode == 1
     assert "CREDS_FILE_MISSING" in proc.stderr
@@ -60,16 +107,21 @@ def test_load_creds_from_temp_repo_file(tmp_path: Path) -> None:
     (tmp_path / "pom.xml").write_text("<project/>\n", encoding="utf-8")
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "_creds.sh").write_text(
-        "LIGHTWELL_USERNAME=fixture-user\nLIGHTWELL_TOKEN=fixture-token\n",
+        "LIGHTWELL_USERNAME=fixture-user\n"
+        "LIGHTWELL_TOKEN=fixture-token\n"
+        "LIGHTWELL_CLIENT_ID=fixture-client\n"
+        "LIGHTWELL_CLIENT_SECRET=fixture-client-secret\n",
         encoding="utf-8",
     )
     load = SHARED_SCRIPTS / "_load-creds.sh"
     proc = _bash(
-        f'source "{load}" && echo CREDS_OK',
+        f'source "{load}" && [ -n "$LIGHTWELL_CLIENT_ID" ] && [ -n "$LIGHTWELL_CLIENT_SECRET" ] && echo CREDS_OK',
         cwd=tmp_path,
         env={
             "LIGHTWELL_USERNAME": "",
             "LIGHTWELL_TOKEN": "",
+            "LIGHTWELL_CLIENT_ID": "",
+            "LIGHTWELL_CLIENT_SECRET": "",
             "GIT_DIR": str(tmp_path / ".not-a-git-dir"),
         },
     )
@@ -77,6 +129,8 @@ def test_load_creds_from_temp_repo_file(tmp_path: Path) -> None:
     assert proc.stdout.strip() == "CREDS_OK"
     assert "fixture-token" not in proc.stdout
     assert "fixture-token" not in proc.stderr
+    assert "fixture-client-secret" not in proc.stdout
+    assert "fixture-client-secret" not in proc.stderr
 
 
 def test_repo_root_walks_to_pom(tmp_path: Path) -> None:
@@ -137,6 +191,8 @@ def test_process_renovate_missing_gh(tmp_path: Path) -> None:
             "PATH": str(bin_dir),
             "LIGHTWELL_USERNAME": "u",
             "LIGHTWELL_TOKEN": "t",
+            "LIGHTWELL_CLIENT_ID": "c",
+            "LIGHTWELL_CLIENT_SECRET": "s",
         },
     )
     assert proc.returncode == 1, proc.stderr
@@ -163,6 +219,8 @@ def test_process_renovate_empty_pr_list(tmp_path: Path) -> None:
             "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
             "LIGHTWELL_USERNAME": "u",
             "LIGHTWELL_TOKEN": "t",
+            "LIGHTWELL_CLIENT_ID": "c",
+            "LIGHTWELL_CLIENT_SECRET": "s",
         },
     )
     assert proc.returncode == 0, proc.stderr

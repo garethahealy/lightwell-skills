@@ -34,8 +34,9 @@ in Agent chat to run one.
 
 The symlink is user-scoped. Skills always run against the **consumer** Maven
 workspace you have open (`pom.xml`), not against this plugin repository.
-Lightwell creds come from that consumer repo (`scripts/_creds.sh`) or from
-exported `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`.
+Lightwell creds come from that consumer repo (`scripts/_creds.sh`) or from the
+four `LIGHTWELL_*` variables in [Credentials](#credentials). All four are
+required.
 
 ## Install for a team
 
@@ -66,14 +67,26 @@ Project **rules** in [`.cursor/rules/`](.cursor/rules) apply only when this
 plugin repo is the open workspace (plugin development). They do not ship with
 the plugin package.
 
+## Credentials
+
+Repository downloads (jars, provenance, SBOMs) use the
+[Red Hat terms-based registry](https://access.redhat.com/terms-based-registry/)
+with `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`. See 
+[Create a Red Hat Lightwell Network service account](https://docs.redhat.com/en/documentation/lightwell_network/current/get_started-create_a_red_hat_lightwell_network_service_account).
+
+Lightwell API calls (version lists and advisories) use a
+[service account](https://console.redhat.com/iam/service-accounts):
+`LIGHTWELL_CLIENT_ID` / `LIGHTWELL_CLIENT_SECRET`. The client exchanges those
+for an access token. See 
+[Get started with Lightwell Network API access](https://docs.redhat.com/en/documentation/lightwell_network/current/get_started-lightwell_network_api_access#reference_1__section_1).
+
 ## Limitations
 
 Skills parse a **single** `pom.xml` with regex (comments and indent preserved).
 They do not resolve parent POMs, BOMs / `dependencyManagement` as Maven does,
 profiles, or a multi-module reactor. `dependencyManagement` `<dependency>`
 blocks are currently treated like directs. Demo catalog:
-`lightwell` on packages.redhat.com. Provenance bundles are not
-published there yet (live cosign tests are skipped).
+`lightwell` on packages.redhat.com, including provenance bundles.
 
 **Runtime:** Python **3.14+** (CLIs exit 2 if older), Bash 5+, `jq`. Transitive
 plan/apply and SBOM checks need Maven (`mvnd` or `mvn`). Attestations need
@@ -98,8 +111,9 @@ make test-live   # live catalog; needs LIGHTWELL_* or scripts/_creds.sh
 make test        # unit + live
 ```
 
-Live catalog tests (`@pytest.mark.live`) hit packages.redhat.com and need
-`LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN` (or `scripts/_creds.sh` via
+Live catalog tests (`@pytest.mark.live`) hit packages.redhat.com and the
+Lightwell API. They need `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN` and
+`LIGHTWELL_CLIENT_ID` / `LIGHTWELL_CLIENT_SECRET` (or `scripts/_creds.sh` via
 `_load-creds.sh`), network, and `mvn` on `PATH`. Plugin CI runs unit and live
 tests on every push.
 

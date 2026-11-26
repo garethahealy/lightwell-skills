@@ -1,6 +1,7 @@
-"""Authenticated HTTPS GETs via http_pool (OSV + provenance downloads).
+"""Authenticated HTTPS GETs for provenance bundles and CycloneDX SBOMs.
 
-Never prints credentials. Requires Python 3.14+.
+Repository downloads use HTTP Basic with ``LIGHTWELL_USERNAME`` /
+``LIGHTWELL_TOKEN``. Never prints credentials. Requires Python 3.14+.
 """
 
 from __future__ import annotations
@@ -21,25 +22,18 @@ _NO_STORE_HEADERS = {
 
 
 class HttpAuthError(Exception):
-    """HTTP 401/403 from packages.redhat.com."""
+    """HTTP 401/403. ``credential`` names what the caller should check."""
 
-    def __init__(self, code: int = 403) -> None:
+    def __init__(self, code: int = 403, *, credential: str = "LIGHTWELL_TOKEN") -> None:
         self.code = code
-        super().__init__(f"AUTH_FAILED: HTTP {code} — validate LIGHTWELL_TOKEN")
+        self.credential = credential
+        super().__init__(f"AUTH_FAILED: HTTP {code} — validate {credential}")
 
 
-def auth_get(
-    url: str,
-    username: str,
-    token: str,
-    *,
-    etag: str | None = None,
-) -> tuple[int, str, dict[str, str]]:
+def auth_get(url: str, username: str, token: str) -> tuple[int, str, dict[str, str]]:
     """Return (status, body, headers). Raises HttpAuthError on 401/403."""
     headers = dict(_NO_STORE_HEADERS)
     headers["Authorization"] = basic_auth_header(username, token)
-    if etag:
-        headers["If-None-Match"] = etag
     try:
         status, body, resp_headers = shared_https_pool().request(url, headers=headers, method="GET")
     except HttpFetchError as exc:
@@ -47,14 +41,6 @@ def auth_get(
     if status in (401, 403):
         raise HttpAuthError(status)
     return status, body, resp_headers
-
-
-def header_value(headers: dict[str, str], name: str) -> str | None:
-    needle = name.lower()
-    for key, value in headers.items():
-        if key.lower() == needle:
-            return value.strip()
-    return None
 
 
 def download_to_path(

@@ -21,12 +21,15 @@ Scripts live next to this file under `scripts/`. From a skill, set
 
 ## What Lightwell is
 
-[Lightwell](https://console.redhat.com/lightwell) on
-[packages.redhat.com](https://packages.redhat.com/) supplies remediated /
+[Lightwell](https://console.redhat.com/lightwell) on the
+[Red Hat terms-based registry](https://access.redhat.com/terms-based-registry/)
+([packages.redhat.com](https://packages.redhat.com/)) supplies remediated /
 validated packages via the content root
 `/api/pulp-content/lightwell/`. Resolved via the consumer repo's
-`.m2/settings.xml` with `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`. Lightwell
-often **backports**
+`.m2/settings.xml` with `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`.
+Create that account with
+[Create a Red Hat Lightwell Network service account](https://docs.redhat.com/en/documentation/lightwell_network/current/get_started-create_a_red_hat_lightwell_network_service_account).
+Lightwell often **backports**
 fixes onto a pinned upstream line (`.rhlw-*`) instead of forcing a disruptive
 upgrade.
 
@@ -41,15 +44,29 @@ echo "CREDS_OK"
 
 - **Local:** from the **consumer** Maven repo, loads gitignored
   `scripts/_creds.sh` (never Read/print secrets). Not from this plugin tree.
+  The file must export all four: repository creds `LIGHTWELL_USERNAME` /
+  `LIGHTWELL_TOKEN`
+  ([Create a Red Hat Lightwell Network service account](https://docs.redhat.com/en/documentation/lightwell_network/current/get_started-create_a_red_hat_lightwell_network_service_account))
+  and API client creds `LIGHTWELL_CLIENT_ID` / `LIGHTWELL_CLIENT_SECRET`. The
+  loader fails with `CREDS_MISSING` if any value is empty.
 - **CI (this plugin repo):** unit tests do not need Lightwell secrets. Live
-  catalog tests use `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN` from Actions
+  catalog tests use `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN` /
+  `LIGHTWELL_CLIENT_ID` / `LIGHTWELL_CLIENT_SECRET` from Actions secrets.
+- **CI (consumer Maven repo):** export the same four values from Actions
   secrets.
-- **CI (consumer Maven repo):** exported `LIGHTWELL_USERNAME` /
-  `LIGHTWELL_TOKEN` from Actions secrets.
 - Never print `LIGHTWELL_*` or run `set -x` with secrets in the environment.
-- **HTTP 401/403:** stop immediately. Tell the user to validate `LIGHTWELL_TOKEN`
-  (do not treat as MISSING / continue Collect → Apply → Summary). Helpers print
-  `AUTH_FAILED: HTTP … — validate LIGHTWELL_TOKEN`.
+- **HTTP 401/403 from packages.redhat.com** (jars, SBOMs, provenance): stop
+  immediately. Tell the user to validate `LIGHTWELL_TOKEN`. Do not treat as
+  `MISSING`. Helpers print `AUTH_FAILED: HTTP … — validate LIGHTWELL_TOKEN`.
+- **Missing API client credentials:** stop immediately. Helpers print
+  `AUTH_FAILED: set LIGHTWELL_CLIENT_ID and LIGHTWELL_CLIENT_SECRET`.
+- **HTTP 401/403 from the Lightwell API or the SSO token endpoint** (version
+  lists, advisories): stop immediately. Tell the user to validate
+  `LIGHTWELL_CLIENT_ID` and `LIGHTWELL_CLIENT_SECRET`. Do not treat as
+  `MISSING`. Helpers print
+  `AUTH_FAILED: HTTP … — validate LIGHTWELL_CLIENT_ID and LIGHTWELL_CLIENT_SECRET`.
+- **Other SSO token-endpoint failures:** stop immediately. Helpers print
+  `AUTH_FAILED: token endpoint …`.
 - **HTTP 428** or terms still required: stop immediately. Do not treat as
   `MISSING`. Helpers print
   `TERMS_REQUIRED: accept Lightwell terms before continuing`.
@@ -61,12 +78,19 @@ echo "CREDS_OK"
 Attestations need **cosign**. SBOM checks hash files already in the local
 Maven repository. Version lists and remediated OSV advisories come from the
 Lightwell API (`LIGHTWELL_API_ROOT`, default
-`https://console.redhat.com/api/lightwell/v0.1`) with the same
-`LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`. The client probes
-`GET /terms/required` with `Authorization: Bearer`, then HTTP Basic, and keeps
-the first form that returns 200. Jar download, provenance, and CycloneDX
-SBOMs stay on pulp content URLs. HTTPS via `http_pool.py` uses
-`Cache-Control: no-cache` / `Pragma: no-cache`. Not pulp-cli / Pulp admin APIs.
+`https://console.redhat.com/api/lightwell/v0.1`). Create the client in
+[Red Hat service accounts](https://console.redhat.com/iam/service-accounts).
+The exchange is described in
+[Get started with Lightwell Network API access](https://docs.redhat.com/en/documentation/lightwell_network/current/get_started-lightwell_network_api_access#reference_1__section_1).
+The client posts `LIGHTWELL_CLIENT_ID` / `LIGHTWELL_CLIENT_SECRET` to
+`https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token`
+(`grant_type=client_credentials`, `scope=api.console`; override
+`LIGHTWELL_SSO_TOKEN_URL`) and sends `Authorization: Bearer` with the JSON
+`access_token`. It then calls `GET /terms/required` once per token. Jar
+download, provenance, and CycloneDX SBOMs stay on pulp content URLs and use
+HTTP Basic with `LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`. HTTPS via
+`http_pool.py` uses `Cache-Control: no-cache` /
+`Pragma: no-cache`. Not pulp-cli / Pulp admin APIs.
 
 ## Catalogs
 
@@ -84,7 +108,9 @@ or `url` is that catalog base. If the maven filter returns none, the client
 lists repositories again without it and still requires exactly one URL match.
 Several matches is a fetch failure.
 Collect still selects Maven `<latest>` / `<release>` and the highest same-base
-`.rhlw-*` from the published `version` and `builds[].version` strings. Those
+`.rhlw-*`. A build whose `release` is `rhlw-<n>` is published as
+`{version}.rhlw-<n>`. A version line equal to `upstream_version` is not a
+separate coordinate when those builds exist. Those
 results are cached as `maven-metadata.xml` plus the `latest` sidecar. An empty
 version list is `METADATA_EMPTY`. HTTP 404 is `METADATA_FETCH_FAILED`.
 

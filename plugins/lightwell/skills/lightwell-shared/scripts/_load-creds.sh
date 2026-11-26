@@ -2,16 +2,20 @@
 # Source this file; do not execute it. Never prints credentials.
 # Requires Bash 5+.
 #
-# On success: LIGHTWELL_USERNAME and LIGHTWELL_TOKEN are set/exported.
+# Repository access: LIGHTWELL_USERNAME and LIGHTWELL_TOKEN.
+# Lightwell API access: LIGHTWELL_CLIENT_ID and LIGHTWELL_CLIENT_SECRET
+# (exchanged for an access token; not sent to packages.redhat.com).
+#
+# On success: all four variables are set.
 # On failure: prints CREDS_FILE_MISSING or CREDS_MISSING to stderr and returns 1.
 #
-# CI: if LIGHTWELL_USERNAME and LIGHTWELL_TOKEN are already exported (e.g. from
-# GitHub Actions secrets), accept them and skip scripts/_creds.sh.
-# Local: load from the consumer repo's scripts/_creds.sh (gitignored), not
-# from the plugin tree (which may live under ~/.cursor/plugins).
+# If all four are already exported (for example from GitHub Actions secrets),
+# skip scripts/_creds.sh. Otherwise load the consumer repo's scripts/_creds.sh
+# (gitignored), not a file from the plugin tree (which may live under
+# ~/.cursor/plugins). Every variable must be non-empty after that.
 
-if [[ -n "${LIGHTWELL_TOKEN:-}" && -n "${LIGHTWELL_USERNAME:-}" ]]; then
-  export LIGHTWELL_USERNAME LIGHTWELL_TOKEN
+if [[ -n "${LIGHTWELL_TOKEN:-}" && -n "${LIGHTWELL_USERNAME:-}" && -n "${LIGHTWELL_CLIENT_ID:-}" && -n "${LIGHTWELL_CLIENT_SECRET:-}" ]]; then
+  export LIGHTWELL_USERNAME LIGHTWELL_TOKEN LIGHTWELL_CLIENT_ID LIGHTWELL_CLIENT_SECRET
   return 0
 fi
 
@@ -43,7 +47,9 @@ set +a
 
 unset _lw_script_dir _lw_repo_root _lw_creds
 
-if [[ -z "${LIGHTWELL_TOKEN:-}" || -z "${LIGHTWELL_USERNAME:-}" ]]; then
+if [[ -z "${LIGHTWELL_TOKEN:-}" || -z "${LIGHTWELL_USERNAME:-}" || -z "${LIGHTWELL_CLIENT_ID:-}" || -z "${LIGHTWELL_CLIENT_SECRET:-}" ]]; then
   echo "CREDS_MISSING" >&2
   return 1
 fi
+
+export LIGHTWELL_USERNAME LIGHTWELL_TOKEN LIGHTWELL_CLIENT_ID LIGHTWELL_CLIENT_SECRET

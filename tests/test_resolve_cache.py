@@ -55,8 +55,6 @@ def test_resolve_payload_uses_cached_latest(tmp_path: Path) -> None:
             same_base_current=None,
             cache_root=tmp_path,
             ttl=3600,
-            username="u",
-            token="t",
         )
     assert ver == "20220320.0.0.rhlw-00003"
 
@@ -70,7 +68,7 @@ def test_resolve_payload_expired_ttl_refetches(tmp_path: Path) -> None:
       <versions><version>fresh.rhlw-00001</version></versions></metadata>"""
     with patch(
         "lightwell_shared.resolve_metadata.fetch_metadata_http",
-        return_value=(200, xml, {}),
+        return_value=(200, xml),
     ) as fetch:
         ver = resolve_payload(
             "remediated",
@@ -80,8 +78,6 @@ def test_resolve_payload_expired_ttl_refetches(tmp_path: Path) -> None:
             same_base_current=None,
             cache_root=tmp_path,
             ttl=60,
-            username="u",
-            token="t",
         )
     assert ver == "fresh.rhlw-00001"
     fetch.assert_called_once()
@@ -109,8 +105,6 @@ def test_same_base_sidecar_hit(tmp_path: Path) -> None:
             same_base_current="20220320",
             cache_root=tmp_path,
             ttl=3600,
-            username="u",
-            token="t",
         )
     assert ver == "20220320.0.0.rhlw-00003"
 
@@ -129,6 +123,4 @@ def test_negative_cache_raises(tmp_path: Path) -> None:
             same_base_current=None,
             cache_root=tmp_path,
             ttl=3600,
-            username="u",
-            token="t",
         )

@@ -24,8 +24,9 @@ This plugin repository has no application `pom.xml`. GitHub Actions for
 upgrades belong in the **consumer** Maven repo: vendor or check out these
 scripts, then Plan → Collect → Apply (`--include-ask`) → Summary, then
 [verify-attestations](../verify-attestations/SKILL.md). Use
-`LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN` secrets. Do not commit from CI unless
-asked.
+`LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN` for repository downloads and
+`LIGHTWELL_CLIENT_ID` / `LIGHTWELL_CLIENT_SECRET` for the Lightwell API.
+Do not commit from CI unless asked.
 
 ## POM coverage
 
@@ -43,7 +44,8 @@ These skills are **scripted pipelines**. Run them; do not investigate them.
 - Treat script stdout / JSON as authoritative. Report results; do not
   reinterpret, second-guess, or “improve” them.
 - Documented stops only: **ASK** gate after Collect (SemVer); **AUTH_FAILED** /
-  HTTP 401/403 (metadata or OSV); **TERMS_REQUIRED** / HTTP 428. Otherwise, if a
+  HTTP 401/403 (metadata, OSV, or a repository download); **TERMS_REQUIRED** /
+  HTTP 428. Otherwise, if a
   phase exits non-zero: **stop**, show the relevant stderr/stdout, and wait
   for the user.
 - Do **not** use git history (`git log`, `git show`, `git blame`, historical
@@ -84,8 +86,11 @@ auto-applied by `--take-latest`.
 - Do **not** read `.gitignore` / `.cursorignore` paths (creds, `.m2/`). Skill and
   `lightwell-shared` scripts are allowed (to **run**, not to debug).
 - Load secrets via `_load-creds.sh` only — never Read/print `LIGHTWELL_*`.
-- If a Lightwell call returns **HTTP 401/403**, **stop**. Tell the user to
-  validate `LIGHTWELL_TOKEN`. Do not continue or treat as `MISSING`.
+- If a packages.redhat.com download returns **HTTP 401/403**, **stop**. Tell
+  the user to validate `LIGHTWELL_TOKEN`. Do not continue or treat as `MISSING`.
+- If the Lightwell API returns **HTTP 401/403**, **stop**. Tell the user to
+  validate `LIGHTWELL_CLIENT_ID` and `LIGHTWELL_CLIENT_SECRET`. Do not continue
+  or treat as `MISSING`.
 - If the Lightwell API returns **HTTP 428** or terms are still required,
   **stop**. The helper prints `TERMS_REQUIRED: accept Lightwell terms before
   continuing`. Do not treat that as `MISSING`.
@@ -130,8 +135,9 @@ python3 "$SHARED/coords_from_apply.py" \
 - Look at git history or reason about *why* a phase failed / returned empty
 - Debug or bypass the phase scripts; invent workarounds
 - Skip Plan/Collect and edit the pom from guesses
-- Continue after `AUTH_FAILED` / HTTP 403 — stop and ask the user to validate
-  `LIGHTWELL_TOKEN`
+- Continue after `AUTH_FAILED` / HTTP 401 or 403 — stop and ask the user to
+  validate `LIGHTWELL_TOKEN` (repository) or `LIGHTWELL_CLIENT_ID` and
+  `LIGHTWELL_CLIENT_SECRET` (API)
 - Continue after `TERMS_REQUIRED` / HTTP 428 — stop and ask the user to accept
   Lightwell terms
 - Print secrets; invent `.rhlw-*` / CVEs; scrape packages.redhat.com HTML

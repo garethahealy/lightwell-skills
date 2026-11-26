@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from lightwell_shared.lightwell_api import TermsRequiredError
+from lightwell_shared.lightwell_api import ApiError, TermsRequiredError, require_client_credentials
 from lightwell_shared.pom_lib import ask_reason, is_newer, needs_ask
 from lightwell_shared.resolve_metadata import (
     AuthFailedError,
@@ -30,8 +30,6 @@ def try_resolve(
     same_base_current: str | None,
     cache_root: Path | None,
     ttl: int,
-    username: str,
-    token: str,
 ) -> str | None:
     try:
         return resolve_payload(
@@ -42,8 +40,6 @@ def try_resolve(
             same_base_current=same_base_current,
             cache_root=cache_root,
             ttl=ttl,
-            username=username,
-            token=token,
         )
     except AuthFailedError, TermsRequiredError:
         raise
@@ -108,8 +104,6 @@ def _suggest_catalog_latest(
     resolve,
     cache_root: Path | None,
     ttl: int,
-    username: str,
-    token: str,
 ) -> dict:
     """When primary resolve misses, suggest remediated/validated latest as ASK."""
     not_newer: tuple[str, str] | None = None
@@ -125,8 +119,6 @@ def _suggest_catalog_latest(
             same_base_current=None,
             cache_root=cache_root,
             ttl=ttl,
-            username=username,
-            token=token,
         )
         if not version:
             continue
@@ -176,8 +168,6 @@ def collect_one(
     take_latest: bool,
     cache_root: Path | None,
     ttl: int,
-    username: str,
-    token: str,
     resolve=try_resolve,
 ) -> dict:
     g = dep["groupId"]
@@ -212,8 +202,6 @@ def collect_one(
             same_base_current=cur,
             cache_root=cache_root,
             ttl=ttl,
-            username=username,
-            token=token,
         )
         used_catalog = "remediated"
     elif catalog == "validated":
@@ -225,8 +213,6 @@ def collect_one(
             same_base_current=None,
             cache_root=cache_root,
             ttl=ttl,
-            username=username,
-            token=token,
         )
         used_catalog = "validated"
         probed_latest.add("validated")
@@ -240,8 +226,6 @@ def collect_one(
             same_base_current=cur,
             cache_root=cache_root,
             ttl=ttl,
-            username=username,
-            token=token,
         )
         if target:
             used_catalog = "remediated"
@@ -254,8 +238,6 @@ def collect_one(
                 same_base_current=None,
                 cache_root=cache_root,
                 ttl=ttl,
-                username=username,
-                token=token,
             )
             probed_latest.add("validated")
             if target:
@@ -273,8 +255,6 @@ def collect_one(
             resolve=resolve,
             cache_root=cache_root,
             ttl=ttl,
-            username=username,
-            token=token,
         )
 
     return _result_keep_or_ask_upgrade(
@@ -326,10 +306,10 @@ def main() -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    username = os.environ.get("LIGHTWELL_USERNAME", "")
-    token = os.environ.get("LIGHTWELL_TOKEN", "")
-    if not username or not token:
-        print("CREDS_MISSING", file=sys.stderr)
+    try:
+        require_client_credentials()
+    except ApiError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
     deps = plan.get("dependencies") or []
@@ -341,8 +321,6 @@ def main() -> int:
             take_latest=args.take_latest,
             cache_root=cache_root,
             ttl=args.ttl,
-            username=username,
-            token=token,
         )
 
     try:

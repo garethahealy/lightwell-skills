@@ -11,12 +11,13 @@ from typing import Any
 
 from lightwell_shared.download_http import HttpAuthError
 from lightwell_shared.fetch_osv import fetch_osv_lines_for_bumps
+from lightwell_shared.lightwell_api import ApiError
 from lightwell_shared.lightwell_urls import OSV_REMEDIATED_BASE
 from lightwell_shared.schema import require_schema
 
 
 class OsvAuthError(RuntimeError):
-    """packages.redhat.com rejected OSV credentials (HTTP 401/403)."""
+    """The Lightwell API rejected client credentials, or they are missing."""
 
 
 class OsvFetchError(RuntimeError):
@@ -36,6 +37,11 @@ def fetch_osv_lines(bumps: list[tuple[str, str, str, str]]) -> list[str]:
     except HttpAuthError as exc:
         print(str(exc), file=sys.stderr)
         raise OsvAuthError(str(exc)) from exc
+    except ApiError as exc:
+        print(str(exc), file=sys.stderr)
+        if str(exc).startswith("AUTH_FAILED:"):
+            raise OsvAuthError(str(exc)) from exc
+        raise OsvFetchError(str(exc)) from exc
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         raise OsvFetchError(str(exc)) from exc
@@ -165,10 +171,7 @@ def run_upgrade_summary(
             try:
                 osv_lines = fetch_osv_lines(osv_bumps)
             except OsvAuthError as exc:
-                print(
-                    f"AUTH_FAILED: validate LIGHTWELL_TOKEN ({exc})",
-                    file=sys.stderr,
-                )
+                print(str(exc), file=sys.stderr)
                 return 1
             except OsvFetchError:
                 return 1

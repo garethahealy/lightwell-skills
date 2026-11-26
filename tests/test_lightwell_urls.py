@@ -5,11 +5,13 @@ from __future__ import annotations
 from lightwell_shared.lightwell_urls import (
     CONTENT_ROOT,
     DEFAULT_API_ROOT,
+    DEFAULT_SSO_TOKEN_URL,
     api_root,
     java_catalog_base,
     maven_metadata_url,
     provenance_bundle_url,
     sbom_url,
+    sso_token_url,
 )
 
 
@@ -19,7 +21,10 @@ def test_default_api_root(monkeypatch) -> None:
     assert api_root() == "https://example.test/api/lightwell/v0.1"
 
 
-def test_default_content_root() -> None:
+def test_default_sso_token_url(monkeypatch) -> None:
+    assert DEFAULT_SSO_TOKEN_URL == ("https://sso.redhat.com/auth/realms/redhat-external/protocol/openid-connect/token")
+    monkeypatch.setenv("LIGHTWELL_SSO_TOKEN_URL", "https://example.test/token/")
+    assert sso_token_url() == "https://example.test/token/"
     assert CONTENT_ROOT.rstrip("/").endswith("/pulp-content/lightwell")
     assert java_catalog_base("remediated").endswith("/java/remediated/")
     assert java_catalog_base("validated").endswith("/java/validated/")

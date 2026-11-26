@@ -24,8 +24,7 @@ Contract: [upgrade-common.md](../lightwell-shared/upgrade-common.md)
 [packages-redhat.md](../lightwell-shared/packages-redhat.md).
 
 Requires `cosign` and `mvn`/`mvnd` (`LIGHTWELL_MVN` to override). Provenance
-is cached under `lightwell-provenance/`. Demo catalog does not publish bundles
-yet.
+is cached under `lightwell-provenance/`.
 
 ```
 Progress:
@@ -60,4 +59,5 @@ lines as-is. Workers: `LIGHTWELL_ATTEST_JOBS` (default 8).
 - Extract a public key from the bundle or use any key other than
   `pnc-provenance-signing-key-1.pub`
 - Use `cosign verify-blob` instead of `verify-blob-attestation`
-- Continue after `AUTH_FAILED` / HTTP 403
+- Continue after `AUTH_FAILED` / HTTP 401 or 403 — repository download; validate
+  `LIGHTWELL_TOKEN`

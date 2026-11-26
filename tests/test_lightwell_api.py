@@ -18,6 +18,7 @@ from lightwell_shared.lightwell_api import (
     list_advisories,
     render_metadata_xml,
     select_catalog_repository,
+    set_access_token,
     set_transport,
 )
 from lightwell_shared.lightwell_urls import api_root, java_catalog_base
@@ -40,6 +41,7 @@ _TOKEN = "tok"
 @pytest.fixture(autouse=True)
 def _isolate() -> None:
     clear_state()
+    set_access_token("test-access-token")
     _memo.clear()
     yield
     clear_state()
@@ -83,9 +85,36 @@ def test_metadata_url_coords_round_trip() -> None:
 def test_flatten_keeps_published_versions_only() -> None:
     versions = flatten_published_versions(_versions_body())
     assert versions == [
-        "20220320",
         "20220320.0.0.rhlw-00001",
         "20220320.0.0.rhlw-00003",
+        "20220320",
+    ]
+
+
+def test_flatten_joins_rhlw_release_onto_upstream_version() -> None:
+    versions = flatten_published_versions(
+        {
+            "versions": [
+                {
+                    "version": "20220320.0.0",
+                    "upstream_version": "20220320.0.0",
+                    "builds": [
+                        {"version": "20220320.0.0", "release": "rhlw-00001"},
+                        {"version": "20220320.0.0", "release": "rhlw-00003"},
+                    ],
+                },
+                {
+                    "version": "2.14.2",
+                    "upstream_version": "2.14.2",
+                    "builds": [{"version": "2.14.2", "release": ""}],
+                },
+            ]
+        }
+    )
+    assert versions == [
+        "20220320.0.0.rhlw-00001",
+        "20220320.0.0.rhlw-00003",
+        "2.14.2",
     ]
 
 
@@ -105,14 +134,12 @@ def test_select_catalog_repository_requires_one_match() -> None:
         select_catalog_repository([repo, dict(repo)], "remediated")
 
 
-def test_auth_probe_locks_basic_after_bearer_denial() -> None:
+def test_api_sends_sso_access_token() -> None:
     seen: list[str] = []
 
     def transport(url: str, headers: dict[str, str]) -> tuple[int, str, dict[str, str]]:
         seen.append(headers["Authorization"])
         if url.endswith("/terms/required"):
-            if headers["Authorization"].startswith("Bearer "):
-                return 401, "", {}
             return 200, '{"required": false}', {}
         if "java_packages/org.json/json" in url:
             return 200, json.dumps(_versions_body()), {}
@@ -121,11 +148,11 @@ def test_auth_probe_locks_basic_after_bearer_denial() -> None:
         raise AssertionError(url)
 
     set_transport(transport)
-    xml = java_package_metadata_xml("remediated", "org.json", "json", _USER, _TOKEN)
+    xml = java_package_metadata_xml("remediated", "org.json", "json")
     assert extract_tag(xml, "latest") == "20220320.0.0.rhlw-00003"
-    assert seen[0].startswith("Bearer ")
-    assert seen[1].startswith("Basic ")
-    assert all(item.startswith("Basic ") for item in seen[2:])
+    assert seen
+    assert set(seen) == {"Bearer test-access-token"}
+    assert all(not item.startswith("Basic ") for item in seen)
 
 
 def test_terms_required_stops() -> None:
@@ -135,18 +162,96 @@ def test_terms_required_stops() -> None:
 
     set_transport(transport)
     with pytest.raises(TermsRequiredError, match="TERMS_REQUIRED"):
-        java_package_metadata_xml("remediated", "org.json", "json", _USER, _TOKEN)
+        java_package_metadata_xml("remediated", "org.json", "json")
 
 
-def test_auth_failure_when_neither_scheme_is_accepted() -> None:
+def test_auth_failure_when_access_token_is_rejected() -> None:
     def transport(url: str, headers: dict[str, str]) -> tuple[int, str, dict[str, str]]:
         del url, headers
         return 403, "", {}
 
     set_transport(transport)
     with pytest.raises(HttpAuthError) as raised:
-        java_package_metadata_xml("remediated", "org.json", "json", _USER, _TOKEN)
+        java_package_metadata_xml("remediated", "org.json", "json")
     assert raised.value.code == 403
+    assert "LIGHTWELL_CLIENT_ID" in str(raised.value)
+    assert "LIGHTWELL_TOKEN" not in str(raised.value)
+
+
+def test_client_credentials_grant_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_access_token(None)
+    monkeypatch.setenv("LIGHTWELL_CLIENT_ID", "client-id")
+    monkeypatch.setenv("LIGHTWELL_CLIENT_SECRET", "client-secret")
+    posts: list[tuple[str, str, bytes | None]] = []
+
+    class _Pool:
+        @staticmethod
+        def request(
+            url: str,
+            *,
+            headers: dict[str, str],
+            method: str = "GET",
+            body: bytes | None = None,
+        ) -> tuple[int, str, dict[str, str]]:
+            del headers
+            posts.append((url, method, body))
+            payload = json.dumps({"access_token": "issued-token", "expires_in": 120})
+            return 200, payload, {}
+
+    monkeypatch.setattr("lightwell_shared.lightwell_api.shared_https_pool", lambda: _Pool())
+
+    seen: list[str] = []
+
+    def transport(url: str, headers: dict[str, str]) -> tuple[int, str, dict[str, str]]:
+        seen.append(headers["Authorization"])
+        if url.endswith("/terms/required"):
+            return 200, '{"required": false}', {}
+        if "content_type=maven" in url:
+            return 200, json.dumps({"data": [_repo()], "meta": {"count": 1}}), {}
+        if "java_packages/org.json/json" in url:
+            return 200, json.dumps(_versions_body()), {}
+        raise AssertionError(url)
+
+    set_transport(transport)
+    java_package_metadata_xml("remediated", "org.json", "json")
+    java_package_metadata_xml("remediated", "org.json", "json")
+
+    assert len(posts) == 1
+    url, method, body = posts[0]
+    assert url.endswith("/protocol/openid-connect/token")
+    assert method == "POST"
+    assert body is not None
+    form = body.decode("utf-8")
+    assert "grant_type=client_credentials" in form
+    assert "client_id=client-id" in form
+    assert "client_secret=client-secret" in form
+    assert "scope=api.console" in form
+    assert seen
+    assert set(seen) == {"Bearer issued-token"}
+    assert _TOKEN not in form
+    assert _USER not in form
+
+
+def test_missing_client_credentials_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_access_token(None)
+    monkeypatch.delenv("LIGHTWELL_CLIENT_ID", raising=False)
+    monkeypatch.delenv("LIGHTWELL_CLIENT_SECRET", raising=False)
+
+    def transport(url: str, headers: dict[str, str]) -> tuple[int, str, dict[str, str]]:
+        del url, headers
+        raise AssertionError("SSO credentials were missing; the API should not be called")
+
+    set_transport(transport)
+    with pytest.raises(AuthFailedError, match="LIGHTWELL_CLIENT_ID"):
+        resolve_payload(
+            "remediated",
+            "org.json",
+            "json",
+            tag="latest",
+            same_base_current=None,
+            cache_root=None,
+            ttl=0,
+        )
 
 
 def test_repository_paging_and_content_type_fallback() -> None:
@@ -167,7 +272,7 @@ def test_repository_paging_and_content_type_fallback() -> None:
         raise AssertionError(url)
 
     set_transport(transport)
-    xml = java_package_metadata_xml("validated", "org.json", "json", _USER, _TOKEN)
+    xml = java_package_metadata_xml("validated", "org.json", "json")
     assert "20220320.0.0.rhlw-00003" in xml
     assert any("content_type=maven" in url for url in calls)
     assert any("/repositories?" in url and "content_type=maven" not in url for url in calls)
@@ -189,7 +294,7 @@ def test_repository_list_reads_every_page() -> None:
         raise AssertionError(url)
 
     set_transport(transport)
-    xml = java_package_metadata_xml("remediated", "org.json", "json", _USER, _TOKEN)
+    xml = java_package_metadata_xml("remediated", "org.json", "json")
     assert "20220320.0.0.rhlw-00003" in xml
 
 
@@ -208,7 +313,7 @@ def test_advisory_query_omits_narrowing_filters() -> None:
         raise AssertionError(url)
 
     set_transport(transport)
-    assert list_advisories("org.json", "json", _USER, _TOKEN) == []
+    assert list_advisories("org.json", "json") == []
     query = next(url for url in seen if "/advisories?" in url)
     assert "package_name=org.json%3Ajson" in query
     assert "repository=lightwell-java-remediated" in query
@@ -237,8 +342,6 @@ def test_resolve_payload_same_base_and_latest(tmp_path: Path) -> None:
         same_base_current="20220320",
         cache_root=tmp_path,
         ttl=3600,
-        username=_USER,
-        token=_TOKEN,
     )
     assert same == "20220320.0.0.rhlw-00003"
     _memo.clear()
@@ -250,8 +353,6 @@ def test_resolve_payload_same_base_and_latest(tmp_path: Path) -> None:
         same_base_current=None,
         cache_root=tmp_path / "latest",
         ttl=3600,
-        username=_USER,
-        token=_TOKEN,
     )
     assert latest == "20220320.0.0.rhlw-00003"
 
@@ -268,16 +369,12 @@ def test_fetch_metadata_http_maps_404_and_auth(tmp_path: Path) -> None:
         raise AssertionError(url)
 
     set_transport(missing)
-    code, body, _headers = fetch_metadata_http(
-        maven_metadata_url("remediated", "org.json", "json"),
-        _USER,
-        _TOKEN,
-        None,
-    )
+    code, body = fetch_metadata_http(maven_metadata_url("remediated", "org.json", "json"))
     assert code == 404
     assert body == ""
 
     clear_state()
+    set_access_token("test-access-token")
 
     def denied(url: str, headers: dict[str, str]) -> tuple[int, str, dict[str, str]]:
         del url, headers
@@ -293,8 +390,6 @@ def test_fetch_metadata_http_maps_404_and_auth(tmp_path: Path) -> None:
             same_base_current=None,
             cache_root=tmp_path,
             ttl=0,
-            username=_USER,
-            token=_TOKEN,
         )
 
 
@@ -313,8 +408,6 @@ def test_try_resolve_does_not_swallow_terms() -> None:
             same_base_current=None,
             cache_root=None,
             ttl=0,
-            username=_USER,
-            token=_TOKEN,
         )
 
 
@@ -339,6 +432,4 @@ def test_empty_version_list_is_metadata_empty() -> None:
             same_base_current=None,
             cache_root=None,
             ttl=0,
-            username=_USER,
-            token=_TOKEN,
         )

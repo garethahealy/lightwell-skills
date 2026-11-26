@@ -1,8 +1,8 @@
 """Fetch Lightwell remediated advisories and match version bumps.
 
-Credentials from LIGHTWELL_USERNAME / LIGHTWELL_TOKEN (never printed).
-Reads GET /advisories on the Lightwell API. Stdout lines still point ``osv=``
-at the remediated advisory JSON on packages.redhat.com.
+Advisory reads use the Lightwell API (``LIGHTWELL_CLIENT_ID`` /
+``LIGHTWELL_CLIENT_SECRET``). Reads GET /advisories. Stdout lines still point
+``osv=`` at the remediated advisory JSON on packages.redhat.com.
 
 Usage:
   fetch_osv.py <groupId> <artifactId> <fromVersion> <toVersion> [...]
@@ -25,7 +25,7 @@ from typing import Any
 
 import lightwell_shared.match_osv_cves as matcher
 from lightwell_shared.download_http import HttpAuthError
-from lightwell_shared.lightwell_api import ApiError, TermsRequiredError, list_advisories
+from lightwell_shared.lightwell_api import ApiError, TermsRequiredError, list_advisories, require_client_credentials
 from lightwell_shared.lightwell_urls import OSV_REMEDIATED_BASE
 from lightwell_shared.runtime import require_python
 from lightwell_shared.thread_jobs import map_threaded
@@ -140,8 +140,6 @@ def _load_package_advisories(
     group_id: str,
     artifact_id: str,
     *,
-    username: str,
-    token: str,
     cache_dir: Path | None,
     ttl: int,
     verbose: bool,
@@ -155,10 +153,12 @@ def _load_package_advisories(
                 print(f"Advisory cache hit {package}", file=sys.stderr)
             return cached
     try:
-        rows = list_advisories(group_id, artifact_id, username, token)
+        rows = list_advisories(group_id, artifact_id)
     except HttpAuthError, TermsRequiredError:
         raise
     except ApiError as exc:
+        if str(exc).startswith("AUTH_FAILED:"):
+            raise
         raise RuntimeError(f"ADVISORY_FETCH_FAILED: {exc}") from exc
     if path is not None:
         _write_cached(path, rows)
@@ -168,22 +168,19 @@ def _load_package_advisories(
 def fetch_osv_lines_for_bumps(
     bumps: list[tuple[str, str, str, str]],
     *,
-    username: str | None = None,
-    token: str | None = None,
     no_cache: bool = False,
     verbose: bool = False,
 ) -> list[str]:
     """Library entry: return OSV match lines for version bumps.
 
-    Raises HttpAuthError on 401/403. Raises TermsRequiredError when terms block
-    the API. Raises RuntimeError on other fetch failures.
+    Raises HttpAuthError on 401/403. Raises ApiError when the message starts
+    with ``AUTH_FAILED:`` (missing client credentials or a token-endpoint
+    failure). Raises TermsRequiredError when terms block the API. Raises
+    RuntimeError on other fetch failures.
     """
     if not bumps:
         return []
-    user = username if username is not None else os.environ.get("LIGHTWELL_USERNAME", "")
-    tok = token if token is not None else os.environ.get("LIGHTWELL_TOKEN", "")
-    if not user or not tok:
-        raise RuntimeError("CREDS_MISSING")
+    require_client_credentials()
 
     jobs = int(os.environ.get("LIGHTWELL_OSV_JOBS", "16"))
     if jobs < 1:
@@ -214,8 +211,6 @@ def fetch_osv_lines_for_bumps(
         return _load_package_advisories(
             group_id,
             artifact_id,
-            username=user,
-            token=tok,
             cache_dir=cache_dir,
             ttl=ttl,
             verbose=verbose,
@@ -225,7 +220,7 @@ def fetch_osv_lines_for_bumps(
         packages,
         work,
         max_workers=jobs,
-        cancel_on=(HttpAuthError, TermsRequiredError),
+        cancel_on=(HttpAuthError, TermsRequiredError, ApiError),
     )
     by_package = {
         f"{group_id}:{artifact_id}": rows for (group_id, artifact_id), rows in zip(packages, fetched, strict=True)
@@ -267,7 +262,7 @@ def main() -> int:
             no_cache=args.no_cache,
             verbose=args.verbose,
         )
-    except HttpAuthError as exc:
+    except (HttpAuthError, ApiError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
     except (TermsRequiredError, RuntimeError) as exc:

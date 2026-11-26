@@ -18,10 +18,11 @@ Batch mode prints: catalog groupId:artifactId -> version
 --same-base: highest .rhlw-* on the same upstream base as currentVersion
   (batch lines: catalog groupId artifactId currentVersion).
 
-Credentials from LIGHTWELL_USERNAME / LIGHTWELL_TOKEN (never printed).
-Version lists come from the Lightwell API and are cached as maven-metadata.xml
-(etag, fetched_at, tag values, same-base sidecars, negative markers). Never uses
-HTTP Expires / Cache-Control response headers for cache decisions.
+Credentials from the environment (never printed). Version lists come from the
+Lightwell API (``LIGHTWELL_CLIENT_ID`` / ``LIGHTWELL_CLIENT_SECRET``). Results
+are cached as maven-metadata.xml (fetched_at, tag values, same-base sidecars,
+negative markers). Never uses HTTP Expires / Cache-Control response headers
+for cache decisions.
 Requires Python 3.14+ (skill pin; no version fallbacks).
 """
 
@@ -43,6 +44,7 @@ from lightwell_shared.lightwell_api import (
     PackageNotFound,
     TermsRequiredError,
     java_package_metadata_xml,
+    require_client_credentials,
 )
 from lightwell_shared.lightwell_urls import maven_metadata_url
 from lightwell_shared.pom_lib import RHLW_RE, semver_triple
@@ -65,13 +67,13 @@ class MetadataError(Exception):
 
 
 class AuthFailedError(MetadataError):
-    """HTTP 401/403 from packages.redhat.com — bad or stale LIGHTWELL_TOKEN."""
+    """HTTP 401/403 from the Lightwell API — client credentials were rejected."""
 
-    def __init__(self, http_code: int = 403) -> None:
-        super().__init__(
-            f"AUTH_FAILED: HTTP {http_code} — validate LIGHTWELL_TOKEN",
-            code=1,
+    def __init__(self, http_code: int = 403, *, detail: str | None = None) -> None:
+        message = detail or (
+            f"AUTH_FAILED: HTTP {http_code} — validate LIGHTWELL_CLIENT_ID and LIGHTWELL_CLIENT_SECRET"
         )
+        super().__init__(message, code=1)
         self.http_code = http_code
 
 
@@ -160,15 +162,6 @@ def highest_rhlw_on_base(versions: list[str], current: str) -> str | None:
             best_n = n
             best = ver
     return best
-
-
-def header_value(headers: dict[str, str], name: str) -> str | None:
-    """Return a response header (case-insensitive)."""
-    needle = name.lower()
-    for key, value in headers.items():
-        if key.lower() == needle:
-            return value.strip()
-    return None
 
 
 def coord_cache_dir(cache_root: Path, catalog: str, group_id: str, artifact_id: str) -> Path:
@@ -269,30 +262,25 @@ def _coords_from_metadata_url(url: str) -> tuple[str, str, str]:
     return catalog, group_id, artifact_id
 
 
-def fetch_metadata_http(
-    url: str,
-    username: str,
-    token: str,
-    etag: str | None,
-) -> tuple[int, str, dict[str, str]]:
-    """Return ``(http_code, maven-metadata.xml, headers)`` from the Lightwell API.
+def fetch_metadata_http(url: str) -> tuple[int, str]:
+    """Return ``(http_code, maven-metadata.xml)`` from the Lightwell API.
 
-    ``etag`` is ignored. The API has no pulp validator; disk TTL still applies
-    before this function is called. Tests patch this seam.
+    Disk TTL applies before this function is called. Tests patch this seam.
     """
-    del etag
     catalog, group_id, artifact_id = _coords_from_metadata_url(url)
     try:
-        xml = java_package_metadata_xml(catalog, group_id, artifact_id, username, token)
+        xml = java_package_metadata_xml(catalog, group_id, artifact_id)
     except HttpAuthError as exc:
-        return exc.code, "", {}
+        raise AuthFailedError(exc.code, detail=str(exc)) from exc
     except PackageNotFound:
-        return 404, "", {}
+        return 404, ""
     except TermsRequiredError:
         raise
     except ApiError as exc:
+        if is_auth_error(exc):
+            raise AuthFailedError(401, detail=str(exc)) from exc
         raise MetadataError(f"METADATA_FETCH_FAILED: {exc}") from exc
-    return 200, xml, {}
+    return 200, xml
 
 
 def resolve_one(
@@ -303,8 +291,6 @@ def resolve_one(
     tag: str | None,
     cache_root: Path | None,
     ttl: int,
-    username: str,
-    token: str,
 ) -> str:
     """Return version string or full XML."""
     url = maven_metadata_url(catalog, group_id, artifact_id)
@@ -325,23 +311,8 @@ def resolve_one(
         xml = read_text(cdir / "maven-metadata.xml")
 
     if xml is None:
-        etag = read_text(cdir / "etag") if cdir else None
-        etag = etag.strip() if etag else None
-        code, body, headers = fetch_metadata_http(url, username, token, etag)
-        if code == 304 and cdir:
-            xml = read_text(cdir / "maven-metadata.xml")
-            if not xml:
-                raise MetadataError("METADATA_FETCH_FAILED: 304 without cache")
-            with cache_dir_lock(cdir):
-                write_text_atomic(cdir / "fetched_at", str(int(time.time())))
-                clear_negative(cdir)
-                # Keep tag sidecars warm from XML when missing
-                for t in ("latest", "release"):
-                    if not (cdir / t).is_file():
-                        val = extract_tag(xml, t)
-                        if val:
-                            write_text_atomic(cdir / t, val)
-        elif code == 200:
+        code, body = fetch_metadata_http(url)
+        if code == 200:
             if not body.strip():
                 write_negative(cdir, "METADATA_EMPTY")
                 raise MetadataError("METADATA_EMPTY")
@@ -351,9 +322,6 @@ def resolve_one(
                     clear_negative(cdir)
                     write_text_atomic(cdir / "maven-metadata.xml", xml)
                     write_text_atomic(cdir / "fetched_at", str(int(time.time())))
-                    new_etag = header_value(headers, "etag")
-                    if new_etag:
-                        write_text_atomic(cdir / "etag", new_etag)
                     for t in ("latest", "release"):
                         val = extract_tag(xml, t)
                         if val:
@@ -361,11 +329,8 @@ def resolve_one(
         elif code == 404:
             write_negative(cdir, "HTTP 404")
             raise MetadataError("METADATA_FETCH_FAILED: HTTP 404")
-        elif code in (401, 403):
-            # Do not negative-cache auth failures (bad/stale LIGHTWELL_TOKEN)
-            raise AuthFailedError(code)
         else:
-            # Do not negative-cache transient 5xx
+            # Do not negative-cache transient 5xx. Auth failures are raised above.
             raise MetadataError(f"METADATA_FETCH_FAILED: HTTP {code}")
 
     assert xml is not None
@@ -398,8 +363,6 @@ def resolve_payload(
     same_base_current: str | None,
     cache_root: Path | None,
     ttl: int,
-    username: str,
-    token: str,
 ) -> str:
     memo_key = (catalog, group_id, artifact_id, tag, same_base_current, str(cache_root), ttl)
     with _memo_lock:
@@ -433,8 +396,6 @@ def resolve_payload(
             tag=None if same_base_current else tag,
             cache_root=cache_root,
             ttl=ttl,
-            username=username,
-            token=token,
         )
         if same_base_current is None:
             with _memo_lock:
@@ -531,10 +492,10 @@ def main() -> int:
         if args.jobs < 1:
             raise MetadataError("error: --jobs must be a positive integer", 2)
 
-        username = os.environ.get("LIGHTWELL_USERNAME", "")
-        token = os.environ.get("LIGHTWELL_TOKEN", "")
-        if not username or not token:
-            raise MetadataError("CREDS_MISSING")
+        try:
+            require_client_credentials()
+        except ApiError as exc:
+            raise AuthFailedError(401, detail=str(exc)) from exc
 
         if args.no_cache:
             cache_root = None
@@ -573,8 +534,6 @@ def main() -> int:
                 same_base_current=current,
                 cache_root=cache_root,
                 ttl=args.ttl,
-                username=username,
-                token=token,
             )
             if tag is None and current is None:
                 print(payload, end="" if payload.endswith("\n") else "\n")
@@ -606,8 +565,6 @@ def main() -> int:
                     same_base_current=current,
                     cache_root=cache_root,
                     ttl=args.ttl,
-                    username=username,
-                    token=token,
                 )
                 return key, payload, None
             except AuthFailedError, TermsRequiredError:

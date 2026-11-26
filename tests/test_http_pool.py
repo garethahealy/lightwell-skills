@@ -20,7 +20,7 @@ def test_request_coalesces_same_url() -> None:
     calls = {"n": 0}
     lock = threading.Lock()
 
-    def fake_uncached(url, *, headers, method):
+    def fake_uncached(url, *, headers, method, body=None):
         with lock:
             calls["n"] += 1
         threading.Event().wait(0.05)

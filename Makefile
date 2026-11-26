@@ -20,7 +20,8 @@ test-unit:
 	$(PYTEST) $(TEST_DIR) -m "not live"
 
 test-live:
-	@if [ -z "$$LIGHTWELL_USERNAME" ] || [ -z "$$LIGHTWELL_TOKEN" ]; then \
+	@if [ -z "$$LIGHTWELL_USERNAME" ] || [ -z "$$LIGHTWELL_TOKEN" ] \
+		|| [ -z "$$LIGHTWELL_CLIENT_ID" ] || [ -z "$$LIGHTWELL_CLIENT_SECRET" ]; then \
 		set -a; \
 		. "$(SHARED)/_load-creds.sh"; \
 		set +a; \

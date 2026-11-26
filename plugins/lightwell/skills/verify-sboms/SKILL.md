@@ -85,4 +85,5 @@ nothing was hashed.
 - Download jars that are not already in the local repo
 - Compare any hash other than SHA-256
 - Read Maven `.sha1` / `.sha256` sidecars
-- Continue after `AUTH_FAILED` / HTTP 403
+- Continue after `AUTH_FAILED` / HTTP 401 or 403 — repository download; validate
+  `LIGHTWELL_TOKEN`

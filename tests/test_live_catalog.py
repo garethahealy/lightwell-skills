@@ -1,9 +1,10 @@
 """Live tests against the Lightwell catalog and local Maven.
 
-Requires LIGHTWELL_USERNAME / LIGHTWELL_TOKEN, network, and Maven.
-Does not mock packages.redhat.com. Provenance/cosign cases stay in this
-module but are skipped until the live catalog publishes bundles (no cosign
-install in CI until then).
+Requires LIGHTWELL_USERNAME / LIGHTWELL_TOKEN for repository downloads,
+LIGHTWELL_CLIENT_ID / LIGHTWELL_CLIENT_SECRET for the Lightwell API, network,
+and Maven.
+Does not mock packages.redhat.com. Provenance and cosign cases run against
+the live catalog. Cosign must be on ``PATH``.
 """
 
 from __future__ import annotations
@@ -34,8 +35,6 @@ from lightwell_shared.verify_attestations import verify_one
 
 pytestmark = pytest.mark.live
 
-_PROVENANCE_SKIP = pytest.mark.skip(reason="live catalog does not publish provenance bundles yet")
-
 
 @pytest.fixture(scope="session")
 def lightwell_creds() -> tuple[str, str]:
@@ -60,7 +59,7 @@ def live_work(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
 
 @pytest.fixture(scope="session")
 def json_ver(lightwell_creds: tuple[str, str], live_work: SimpleNamespace) -> str:
-    user, token = lightwell_creds
+    del lightwell_creds
     ver = resolve_payload(
         "remediated",
         DEMO_JSON_G,
@@ -69,8 +68,6 @@ def json_ver(lightwell_creds: tuple[str, str], live_work: SimpleNamespace) -> st
         same_base_current=DEMO_JSON_BASE,
         cache_root=live_work.cache,
         ttl=3600,
-        username=user,
-        token=token,
     )
     assert ".rhlw-" in ver, ver
     return ver
@@ -85,7 +82,7 @@ def test_live_metadata_and_collect(
     meta_url = maven_metadata_url("remediated", DEMO_JSON_G, DEMO_JSON_A)
     status, body, _headers = auth_get(meta_url, user, token)
     assert status == 200, status
-    code, synthetic, _headers = fetch_metadata_http(meta_url, user, token, None)
+    code, synthetic = fetch_metadata_http(meta_url)
     assert code == 200, code
     assert set(extract_versions(synthetic)) == set(extract_versions(body))
     assert extract_tag(synthetic, "latest") == extract_tag(body, "latest")
@@ -103,8 +100,6 @@ def test_live_metadata_and_collect(
         take_latest=False,
         cache_root=live_work.cache,
         ttl=3600,
-        username=user,
-        token=token,
     )
     assert row["action"] in {"UPGRADE", "KEEP", "ASK"}, row
     assert row["to"]
@@ -114,11 +109,7 @@ def test_live_metadata_and_collect(
 
 def test_live_osv(lightwell_creds: tuple[str, str], json_ver: str) -> None:
     user, token = lightwell_creds
-    lines = fetch_osv_lines_for_bumps(
-        [(DEMO_JSON_G, DEMO_JSON_A, DEMO_JSON_BASE, json_ver)],
-        username=user,
-        token=token,
-    )
+    lines = fetch_osv_lines_for_bumps([(DEMO_JSON_G, DEMO_JSON_A, DEMO_JSON_BASE, json_ver)])
     for line in lines:
         parts = line.split("|")
         assert len(parts) >= 5, line
@@ -132,11 +123,11 @@ def test_live_osv(lightwell_creds: tuple[str, str], json_ver: str) -> None:
         advisory = json.loads(adv_body)
         label = parts[1]
         aliases = [alias for alias in (advisory.get("aliases") or []) if isinstance(alias, str)]
-        assert label == advisory.get("id") or label in aliases
+        upstream = [item for item in (advisory.get("upstream") or []) if isinstance(item, str)]
+        assert label == advisory.get("id") or label in aliases or label in upstream
         assert parts[3].removeprefix("fixed=") in adv_body
 
 
-@_PROVENANCE_SKIP
 def test_live_provenance_bundle(lightwell_creds: tuple[str, str], json_ver: str, live_work: SimpleNamespace) -> None:
     user, token = lightwell_creds
     url = provenance_bundle_url("remediated", DEMO_JSON_G, DEMO_JSON_A, json_ver)
@@ -179,7 +170,6 @@ def test_live_sbom(lightwell_creds: tuple[str, str], json_ver: str, live_work: S
     assert bom.get("bomFormat") == "CycloneDX"
 
 
-@_PROVENANCE_SKIP
 def test_live_cosign(
     lightwell_creds: tuple[str, str],
     json_ver: str,

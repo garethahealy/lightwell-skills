@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from lightwell_shared.lightwell_api import TermsRequiredError
+from lightwell_shared.lightwell_api import ApiError, TermsRequiredError, require_client_credentials
 from lightwell_shared.mvn_run import run_dependency_tree
 from lightwell_shared.pom_lib import (
     ask_reason,
@@ -51,8 +51,6 @@ def meta_lookup(
     *,
     cache_root: Path | None,
     ttl: int,
-    username: str,
-    token: str,
 ) -> MetaResult:
     try:
         version = resolve_payload(
@@ -63,8 +61,6 @@ def meta_lookup(
             same_base_current=current,
             cache_root=cache_root,
             ttl=ttl,
-            username=username,
-            token=token,
         )
         return MetaResult(ok=True, version=version)
     except AuthFailedError, TermsRequiredError:
@@ -446,10 +442,10 @@ def main() -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    username = os.environ.get("LIGHTWELL_USERNAME", "")
-    token = os.environ.get("LIGHTWELL_TOKEN", "")
-    if not username or not token:
-        print("CREDS_MISSING", file=sys.stderr)
+    try:
+        require_client_credentials()
+    except ApiError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
     cache_root = default_cache_root(args.no_cache)
@@ -479,8 +475,6 @@ def main() -> int:
             ver,
             cache_root=cache_root,
             ttl=args.ttl,
-            username=username,
-            token=token,
         )
 
     if queries:

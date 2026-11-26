@@ -25,8 +25,6 @@ def _run(dep: dict, resolve, *, take_latest: bool = False) -> dict:
         take_latest=take_latest,
         cache_root=None,
         ttl=0,
-        username="u",
-        token="t",
         resolve=resolve,
     )
 
