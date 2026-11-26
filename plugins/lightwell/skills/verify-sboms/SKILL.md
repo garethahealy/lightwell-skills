@@ -48,20 +48,19 @@ source "$SHARED/_load-creds.sh" || exit 1
 bash "$SHARED/verify-sboms.sh" --pom pom.xml
 ```
 
-Stdout is a markdown table, same shape as the upgrade summaries. Report it
-as-is. `No packages checked.` when nothing was hashed. When the SBOM and local
-SHA-256 match, the hash is printed once. A mismatch prints both. A download
-failure prints the HTTP status instead of a hash.
+Stdout is a markdown table, same shape as the upgrade summaries. Paste that
+stdout as markdown. Do not wrap it in a code fence. Leave the blank line
+before the heading. `No packages checked.` when nothing was hashed. When the
+SBOM and local SHA-256 match, the hash is printed once. A mismatch prints
+both. A download failure prints the HTTP status instead of a hash.
 
-```markdown
 ## SBOM SHA-256
 
 | Status | Package | Catalog | Detail |
 |------|------|------|------|
-| OK | `org.json:json:20220320.0.0.rhlw-00003` | remediated | `<sha256>` |
+| OK | `org.json:json:20220320.0.0.rhlw-00003` | remediated | `sha256` |
 | sbom-download | `commons-io:commons-io:2.11.0.rhlw-00011` | remediated | HTTP 404 |
-| mismatch | `commons-io:commons-io:2.11.0` | remediated | SBOM `<sbom sha256>` / local `<local sha256>` |
-```
+| mismatch | `commons-io:commons-io:2.11.0` | remediated | SBOM `sbom-sha256` / local `local-sha256` |
 
 `Status` is `OK`, `mismatch`, or an SBOM failure (`sbom-download`,
 `sbom-parse`, `not-cyclonedx`, `bad-catalog`). Workers:

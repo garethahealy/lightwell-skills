@@ -9,6 +9,7 @@ Usage:
   verify_attestations.py --batch < coords.txt
 
 Never prints credentials. Requires Python 3.14+, cosign, Maven.
+Stdout is a markdown table in the same shape as the upgrade summaries.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from lightwell_shared.download_http import HttpAuthError, download_to_path
@@ -50,6 +52,35 @@ def signing_key_ready(path: Path) -> bool:
     return "BEGIN PUBLIC KEY" in text and "END PUBLIC KEY" in text
 
 
+@dataclass(frozen=True)
+class AttestRow:
+    status: str
+    package: str
+    catalog: str
+    detail: str
+    ok: bool
+
+
+def _md_cell(value: str) -> str:
+    return value.replace("|", "\\|").replace("\n", " ")
+
+
+def format_report(rows: list[AttestRow]) -> str:
+    """Markdown table, or a one-line note when nothing was checked."""
+    if not rows:
+        return "No packages checked.\n"
+    lines = [
+        "",
+        "## Provenance",
+        "",
+        "| Status | Package | Catalog | Detail |",
+        "|------|------|------|------|",
+    ]
+    for row in rows:
+        lines.append(f"| {row.status} | `{_md_cell(row.package)}` | {_md_cell(row.catalog)} | {_md_cell(row.detail)} |")
+    return "\n".join(lines) + "\n"
+
+
 def verify_one(
     catalog: str,
     group_id: str,
@@ -62,11 +93,11 @@ def verify_one(
     username: str,
     token: str,
     verbose: bool,
-) -> tuple[str, bool]:
-    """Return (stdout_line, ok). Raises HttpAuthError on auth failure."""
+) -> AttestRow:
+    """Return one attestation row. Raises HttpAuthError on auth failure."""
     gav = f"{group_id}:{artifact_id}:{version}"
     if catalog not in {"remediated", "validated"}:
-        return f"FAIL {catalog} {gav} reason=bad-catalog", False
+        return AttestRow("FAIL", gav, catalog, "bad-catalog", False)
 
     group_path = group_id.replace(".", "/")
     jar_name = f"{artifact_id}-{version}.jar"
@@ -75,11 +106,11 @@ def verify_one(
     pubkey = signing_key_path()
     if not signing_key_ready(pubkey):
         print(f"KEY_MISSING: {pubkey}", file=sys.stderr)
-        return f"FAIL {catalog} {gav} reason=key-missing", False
+        return AttestRow("FAIL", gav, catalog, "key-missing", False)
 
     if not jar.is_file():
         print(f"JAR_MISSING: {jar}", file=sys.stderr)
-        return f"FAIL {catalog} {gav} reason=jar-missing", False
+        return AttestRow("FAIL", gav, catalog, "jar-missing", False)
 
     if prov_cache is not None:
         cached_dir = prov_cache / catalog / group_path / artifact_id / version
@@ -96,9 +127,9 @@ def verify_one(
         url = provenance_bundle_url(catalog, group_id, artifact_id, version)
         code = download_to_path(url, bundle, username, token)
         if code != 200 or not bundle.is_file() or bundle.stat().st_size == 0:
-            print(f"PROVENANCE_MISSING: {catalog} {gav}", file=sys.stderr)
+            print(f"PROVENANCE_MISSING: {catalog} {gav} HTTP {code}", file=sys.stderr)
             bundle.unlink(missing_ok=True)
-            return f"FAIL {catalog} {gav} reason=provenance-download", False
+            return AttestRow("FAIL", gav, catalog, f"HTTP {code}", False)
     elif verbose:
         print(f"Provenance cache hit {catalog} {gav}", file=sys.stderr)
 
@@ -124,9 +155,9 @@ def verify_one(
     )
     if proc.returncode != 0:
         print(f"VERIFY_FAILED: {catalog} {gav}", file=sys.stderr)
-        return f"FAIL {catalog} {gav} reason=cosign", False
+        return AttestRow("FAIL", gav, catalog, "cosign", False)
 
-    return f"OK {catalog} {gav}", True
+    return AttestRow("OK", gav, catalog, "verified", True)
 
 
 def parse_coords(args: argparse.Namespace) -> list[tuple[str, str, str, str]]:
@@ -235,7 +266,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="lightwell-attest-") as tmp:
         work_root = Path(tmp)
 
-        def work(_idx: int, item: tuple[str, str, str, str]) -> tuple[str, bool]:
+        def work(_idx: int, item: tuple[str, str, str, str]) -> AttestRow:
             catalog, g, a, v = item
             return verify_one(
                 catalog,
@@ -261,12 +292,8 @@ def main() -> int:
             print(str(exc), file=sys.stderr)
             return 1
 
-    failed = 0
-    for line, ok in results:
-        print(line)
-        if not ok:
-            failed = 1
-    return failed
+    sys.stdout.write(format_report(results))
+    return 1 if any(not row.ok for row in results) else 0
 
 
 if __name__ == "__main__":

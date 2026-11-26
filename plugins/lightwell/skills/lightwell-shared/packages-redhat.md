@@ -215,7 +215,8 @@ Provenance URL:
 ```
 
 Use `cosign verify-blob-attestation` (not `verify-blob`) with the shipped key
-`pnc-provenance-signing-key-1.pub`. See
+`pnc-provenance-signing-key-1.pub`. Stdout is a markdown table, same shape as
+the upgrade summaries. See
 [verify-attestations](../verify-attestations/SKILL.md).
 
 ## SBOMs

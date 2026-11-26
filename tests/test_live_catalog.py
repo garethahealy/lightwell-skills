@@ -186,7 +186,7 @@ def test_live_cosign(
         cwd=live_work.settings.parent,
     )
     assert proc.returncode == 0, proc.stderr or proc.stdout
-    line, ok = verify_one(
+    row = verify_one(
         "remediated",
         DEMO_JSON_G,
         DEMO_JSON_A,
@@ -198,5 +198,7 @@ def test_live_cosign(
         token=token,
         verbose=False,
     )
-    assert ok, line
-    assert line.startswith("OK remediated"), line
+    assert row.ok, row
+    assert row.status == "OK"
+    assert row.catalog == "remediated"
+    assert row.detail == "verified"

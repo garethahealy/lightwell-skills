@@ -290,6 +290,7 @@ def format_report(rows: list[tuple[str, bool]]) -> str:
     if not rows:
         return "No packages checked.\n"
     lines = [
+        "",
         "## SBOM SHA-256",
         "",
         "| Status | Package | Catalog | Detail |",

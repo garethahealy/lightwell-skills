@@ -30,7 +30,7 @@ is cached under `lightwell-provenance/`.
 Progress:
 - [ ] 1. Ensure jars exist (build already ran)
 - [ ] 2. Batch-verify bumped Lightwell GAVs
-- [ ] 3. Report OK / FAIL
+- [ ] 3. Report the markdown table
 ```
 
 From pom.xml (standalone / consumer CI):
@@ -50,8 +50,17 @@ python3 "$SHARED/coords_from_apply.py" \
 | bash "$SHARED/verify-attestations.sh" --batch
 ```
 
-Stdout: `OK catalog g:a:v` or `FAIL catalog g:a:v reason=…`. Report those
-lines as-is. Workers: `LIGHTWELL_ATTEST_JOBS` (default 8).
+Stdout is a markdown table, same shape as the upgrade summaries and the SBOM
+report. Paste that stdout as markdown. Do not wrap it in a code fence. Leave
+the blank line before the heading. Workers: `LIGHTWELL_ATTEST_JOBS` (default 8).
+
+## Provenance
+
+| Status | Package | Catalog | Detail |
+|------|------|------|------|
+| OK | `org.json:json:20220320.0.0.rhlw-00003` | remediated | verified |
+| FAIL | `commons-io:commons-io:2.11.0.rhlw-00011` | remediated | HTTP 404 |
+| FAIL | `com.fasterxml.woodstox:woodstox-core:6.0.3.rhlw-00001` | remediated | jar-missing |
 
 ## Do not
 

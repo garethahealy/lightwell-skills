@@ -117,8 +117,8 @@ Collect and Summary (OSV) need creds. Apply uses Maven settings (no
 
 ## Post-Apply attestations
 
-After Apply success (build ok), verify bumped GAVs (report OK/FAIL lines; do
-not dig into why). Never revert `pom.xml` on attestation FAIL /
+After Apply success (build ok), verify bumped GAVs (report the markdown
+table; do not dig into why). Never revert `pom.xml` on attestation FAIL /
 `PROVENANCE_MISSING` or on Maven build failure — leave the pom for the user to
 debug; build failure → exit non-zero → **stop** (skip attestations / Summary).
 

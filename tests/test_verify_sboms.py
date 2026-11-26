@@ -347,7 +347,7 @@ def test_format_report_matches_upgrade_summary_table() -> None:
         (f"| mismatch | {CATALOG} {GAV} | {GAV} | {'ff' * 32} | {ok_sha} |", False),
     ]
     report = format_report(rows)
-    assert report.startswith("## SBOM SHA-256\n\n")
+    assert report.startswith("\n## SBOM SHA-256\n\n")
     assert "| Status | Package | Catalog | Detail |\n|------|------|------|------|\n" in report
     assert f"| OK | `{GAV}` | remediated | `{ok_sha}` |" in report
     assert f"| sbom-download | `{other}` | remediated | HTTP 404 |" in report
@@ -471,7 +471,7 @@ def test_main_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     try:
         assert verify_main() == 0
         report = capsys.readouterr().out
-        assert report.startswith("## SBOM SHA-256\n")
+        assert report.startswith("\n## SBOM SHA-256\n")
         assert f"| OK | `{GAV}` | remediated | `{subject}` |" in report
 
         _seed(cache, _bom([], metadata=_component(GROUP, ARTIFACT, VERSION, "ff" * 20, ref=ROOT_REF)))
