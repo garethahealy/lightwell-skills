@@ -1,16 +1,17 @@
 """Verify Lightwell packages against CycloneDX SBOM SHA-256 hashes.
 
-The upgrade-directs plan selects the packages (direct dependencies from
-``pom.xml``). A hash check runs only when that package is also a main JAR
-(no classifier) in the downloaded CycloneDX SBOM. A missing local file is
-skipped. The only package failure is Status ``mismatch``. Stdout is a
-markdown table of the SBOM SHA-256 and the local SHA-256.
+Packages come from ``--pom`` (directs and promoted ``.rhlw-*`` builds, plus
+validated Lightwell dependencies) and from any coordinates passed on the
+command line. Each of those gets its own CycloneDX SBOM. A hash check also
+covers any other main JAR (no classifier) in that SBOM whose version is
+``.rhlw-*``. A missing local file is skipped. Stdout is a markdown table in the
+same shape as the upgrade summaries.
 
 Usage:
-  verify_sboms.py --from-plan direct-plan.json remediated org.json json 1.0.0.rhlw-00001
-  verify_sboms.py --batch --from-plan direct-plan.json < coords.txt
+  verify_sboms.py --pom pom.xml
+  verify_sboms.py --pom pom.xml remediated org.json json 1.0.0.rhlw-00001
+  verify_sboms.py --batch --pom pom.xml < coords.txt
 
-Without ``--from-plan``, the same plan is built from ``--pom`` (default ``pom.xml``).
 Never prints credentials. Requires Python 3.14+ and Maven.
 """
 
@@ -28,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote
 
-from lightwell_shared.directs_plan import build_direct_plan
+from lightwell_shared.coords_from_pom import coords_from_pom
 from lightwell_shared.download_http import HttpAuthError, download_to_path
 from lightwell_shared.lightwell_urls import sbom_filename, sbom_url
 from lightwell_shared.mvn_run import maven_binary, repo_root_for, resolve_local_repo
@@ -186,32 +187,29 @@ def sbom_jar_packages(bom: dict[str, Any]) -> list[SbomPackage]:
     return packages
 
 
-def plan_coords(plan: dict[str, Any]) -> set[tuple[str, str, str]]:
-    """``(groupId, artifactId, version)`` from an upgrade-directs plan ``dependencies`` list."""
-    dependencies = plan.get("dependencies")
-    if not isinstance(dependencies, list):
-        return set()
-    found: set[tuple[str, str, str]] = set()
-    for dep in dependencies:
-        if not isinstance(dep, dict):
+def lightwell_coordinates(
+    explicit: list[tuple[str, str, str, str]],
+    pom_rows: list[tuple[str, str, str, str]],
+) -> list[tuple[str, str, str, str]]:
+    """Explicit coordinates, then Lightwell packages from the pom, without duplicates."""
+    seen: set[tuple[str, str, str, str]] = set()
+    merged: list[tuple[str, str, str, str]] = []
+    for row in (*explicit, *pom_rows):
+        if row in seen:
             continue
-        group = dep.get("groupId")
-        artifact = dep.get("artifactId")
-        version = dep.get("version")
-        if isinstance(group, str) and isinstance(artifact, str) and isinstance(version, str):
-            group, artifact, version = group.strip(), artifact.strip(), version.strip()
-            if group and artifact and version:
-                found.add((group, artifact, version))
-    return found
+        seen.add(row)
+        merged.append(row)
+    return merged
 
 
-def plan_hits(bom: dict[str, Any], coords: set[tuple[str, str, str]]) -> list[SbomPackage]:
-    """JARs that appear in both the directs plan and the SBOM."""
-    return [
-        package
-        for package in sbom_jar_packages(bom)
-        if (package.group_id, package.artifact_id, package.version) in coords
-    ]
+def sbom_targets(bom: dict[str, Any], coords: set[tuple[str, str, str]]) -> list[SbomPackage]:
+    """Main JARs to hash: ``.rhlw-*`` builds, plus any requested coordinate."""
+    selected: list[SbomPackage] = []
+    for package in sbom_jar_packages(bom):
+        coord = (package.group_id, package.artifact_id, package.version)
+        if ".rhlw-" in package.version or coord in coords:
+            selected.append(package)
+    return selected
 
 
 def load_sbom(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -273,23 +271,60 @@ def _table_row(status: str, sbom: str, package: str, sbom_sha: str, local_sha: s
     return "| " + " | ".join(_md_cell(cell) for cell in cells) + " |", ok
 
 
-REPORT_HEADER = (
-    "| Status | SBOM | Package | SBOM SHA-256 | Local SHA-256 |",
-    "| ------ | ---- | ------- | ------------ | ------------- |",
-)
+def _cells(line: str) -> list[str]:
+    text = line.strip()
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|"):
+        text = text[:-1]
+    return [cell.strip() for cell in text.split("|")]
 
 
 def format_report(rows: list[tuple[str, bool]]) -> str:
-    """Markdown table of check rows, or a one-line note when nothing was checked."""
+    """Markdown table, or a one-line note when nothing was checked.
+
+    Same shape as the upgrade summaries: a heading, then a table with
+    backticked coordinates. Matching hashes are printed once. A download
+    failure prints its HTTP status. A mismatch prints both hashes.
+    """
     if not rows:
         return "No packages checked.\n"
-    body = [line for line, _ok in rows]
-    return "\n".join((*REPORT_HEADER, *body)) + "\n"
+    lines = [
+        "## SBOM SHA-256",
+        "",
+        "| Status | Package | Catalog | Detail |",
+        "|------|------|------|------|",
+    ]
+    for line, _ok in rows:
+        status, sbom, package, sbom_sha, local_sha = _cells(line)
+        catalog, _, sbom_gav = sbom.partition(" ")
+        if sbom_sha.startswith("HTTP ") and not local_sha:
+            detail = sbom_sha
+        elif sbom_sha and sbom_sha == local_sha:
+            detail = f"`{sbom_sha}`"
+        else:
+            parts: list[str] = []
+            if sbom_sha:
+                parts.append(f"SBOM `{sbom_sha}`")
+            if local_sha:
+                parts.append(f"local `{local_sha}`")
+            detail = " / ".join(parts)
+        if sbom_gav and sbom_gav != package:
+            detail = f"{detail} in `{sbom_gav}`".strip()
+        lines.append(f"| {status} | `{_md_cell(package)}` | {_md_cell(catalog)} | {_md_cell(detail)} |")
+    return "\n".join(lines) + "\n"
 
 
-def _fail_gav(catalog: str, group_id: str, artifact_id: str, version: str, reason: str) -> tuple[str, bool]:
+def _fail_gav(
+    catalog: str,
+    group_id: str,
+    artifact_id: str,
+    version: str,
+    reason: str,
+    note: str = "",
+) -> tuple[str, bool]:
     gav = _gav(group_id, artifact_id, version)
-    return _table_row(reason, f"{catalog} {gav}", gav, "", "", ok=False)
+    return _table_row(reason, f"{catalog} {gav}", gav, note, "", ok=False)
 
 
 def _pkg_line(
@@ -370,9 +405,9 @@ def verify_one(
         url = sbom_url(catalog, group_id, artifact_id, version)
         code = download_to_path(url, sbom_path, username, token)
         if code != 200 or not sbom_path.is_file() or sbom_path.stat().st_size == 0:
-            print(f"SBOM_MISSING: {catalog} {gav}", file=sys.stderr)
+            print(f"SBOM_MISSING: {catalog} {gav} HTTP {code}", file=sys.stderr)
             sbom_path.unlink(missing_ok=True)
-            return [_fail_gav(catalog, group_id, artifact_id, version, "sbom-download")]
+            return [_fail_gav(catalog, group_id, artifact_id, version, "sbom-download", note=f"HTTP {code}")]
     elif verbose:
         print(f"SBOM cache hit {catalog} {gav}", file=sys.stderr)
 
@@ -382,23 +417,7 @@ def verify_one(
         print(f"SBOM_INVALID: {catalog} {gav} reason={reason}", file=sys.stderr)
         return [_fail_gav(catalog, group_id, artifact_id, version, reason)]
 
-    return _checked(catalog, group_id, artifact_id, version, plan_hits(bom, allowed), local_repo)
-
-
-def load_direct_plan(path: Path) -> dict[str, Any] | None:
-    """Read an upgrade-directs plan JSON file."""
-    if not path.is_file():
-        print(f"error: plan not found: {path}", file=sys.stderr)
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except OSError, UnicodeError, json.JSONDecodeError:
-        print(f"error: plan is not JSON: {path}", file=sys.stderr)
-        return None
-    if not isinstance(data, dict):
-        print(f"error: plan is not a JSON object: {path}", file=sys.stderr)
-        return None
-    return data
+    return _checked(catalog, group_id, artifact_id, version, sbom_targets(bom, allowed), local_repo)
 
 
 def parse_coords(args: argparse.Namespace) -> list[tuple[str, str, str, str]]:
@@ -414,14 +433,12 @@ def parse_coords(args: argparse.Namespace) -> list[tuple[str, str, str, str]]:
             if len(parts) != 4:
                 raise SystemExit(f"error: batch line must be: catalog groupId artifactId version (got: {line})")
             coords.append((parts[0], parts[1], parts[2], parts[3]))
-    else:
-        if len(args.coords) < 4 or len(args.coords) % 4 != 0:
+    elif args.coords:
+        if len(args.coords) % 4 != 0:
             raise SystemExit("error: expected catalog groupId artifactId version (repeatable sets of four)")
         raw = list(args.coords)
         for i in range(0, len(raw), 4):
             coords.append((raw[i], raw[i + 1], raw[i + 2], raw[i + 3]))
-    if not coords:
-        raise SystemExit("error: no coordinates to verify")
     return coords
 
 
@@ -438,11 +455,10 @@ def main() -> int:
     )
     parser.add_argument("--settings", default="")
     parser.add_argument("--local-repo", default="")
-    parser.add_argument("--pom", default="pom.xml")
     parser.add_argument(
-        "--from-plan",
+        "--pom",
         default="",
-        help="upgrade-directs plan JSON (default: build that plan from --pom)",
+        help="pom.xml whose Lightwell directs and promoted dependencies are checked (default: ./pom.xml when present)",
     )
     parser.add_argument("coords", nargs="*")
     args = parser.parse_args()
@@ -491,17 +507,19 @@ def main() -> int:
         print(f"LOCAL_REPO_FAILED: not a directory: {local_repo}", file=sys.stderr)
         return 1
 
-    if args.from_plan:
-        plan = load_direct_plan(Path(args.from_plan))
-        if plan is None:
-            return 2
+    pom_path = Path(args.pom) if args.pom else Path("pom.xml")
+    if pom_path.is_file():
+        pom_rows = coords_from_pom(pom_path.read_text(encoding="utf-8"))
+    elif args.pom:
+        print(f"error: pom not found: {pom_path}", file=sys.stderr)
+        return 2
     else:
-        pom_path = Path(args.pom)
-        if not pom_path.is_file():
-            print(f"error: pom not found: {pom_path}", file=sys.stderr)
-            return 2
-        plan = build_direct_plan(pom_path.read_text(encoding="utf-8"), pom_path)
-    allowed = plan_coords(plan)
+        pom_rows = []
+    coords = lightwell_coordinates(coords, pom_rows)
+    if not coords:
+        print("error: no Lightwell packages to verify", file=sys.stderr)
+        return 2
+    allowed = {(group, artifact, version) for _catalog, group, artifact, version in coords}
 
     sbom_cache = sbom_cache_root(no_cache=args.no_cache)
     if sbom_cache is not None:
@@ -513,7 +531,7 @@ def main() -> int:
             f"SBOM cache: {sbom_cache if sbom_cache else 'disabled'}",
             file=sys.stderr,
         )
-        print(f"Direct plan packages: {len(allowed)}", file=sys.stderr)
+        print(f"Lightwell packages: {len(allowed)}", file=sys.stderr)
         print(f"SBOM jobs: {args.jobs}", file=sys.stderr)
 
     with tempfile.TemporaryDirectory(prefix="lightwell-sbom-") as tmp:

@@ -11,16 +11,16 @@ description: >-
 Verify **SHA-256** hashes in sibling `{artifactId}-{version}.cyclonedx.json`
 CycloneDX SBOMs against files in the local Maven repo. Does not edit `pom.xml`.
 
-The [upgrade-directs](../upgrade-directs/SKILL.md) Plan is the list of packages
-to consider (`dependencies[]` from `pom.xml`). A hash check runs only when
-that `groupId:artifactId:version` is also a main JAR (no classifier) in the
-SBOM. An SBOM component that is not in the plan is skipped. A plan package
-that is not in the SBOM is skipped. Run Plan on the current pom, including
-after Apply, and pass it with `--from-plan`. If `--from-plan` is omitted, the
-script builds the same plan from `--pom`.
+Check every Lightwell package in `pom.xml`: remediated directs and promoted
+dependencies whose version is `.rhlw-*`, and validated dependencies that carry
+a Lightwell source URL. Promoted transitives are included. Each of those
+packages gets its own CycloneDX SBOM. A hash check also covers any other main
+JAR (no classifier) in that SBOM whose version is `.rhlw-*`.
 
 A JAR that is not in the local repo is skipped. A component with no SHA-256 is
-skipped. The only package failure is Status `mismatch`.
+skipped. Status `mismatch` and SBOM failures (`sbom-download`, `sbom-parse`,
+`not-cyclonedx`, `bad-catalog`) make the command exit non-zero. `sbom-download`
+includes the HTTP status. HTTP 404 means that build has no CycloneDX file.
 
 Pair with [upgrade-directs](../upgrade-directs/SKILL.md) /
 [upgrade-transitives](../upgrade-transitives/SKILL.md) after a successful
@@ -37,41 +37,31 @@ Requires `mvn`/`mvnd` (`LIGHTWELL_MVN` to override). SBOMs are cached under
 
 ```
 Progress:
-- [ ] 1. Plan (upgrade-directs plan.py)
-- [ ] 2. Download CycloneDX SBOMs for Lightwell GAVs
-- [ ] 3. SHA-256 check packages that are in both the plan and the SBOM
-- [ ] 4. Report the table
+- [ ] 1. Read Lightwell packages from pom.xml (directs and promoted)
+- [ ] 2. Download each package's CycloneDX SBOM
+- [ ] 3. SHA-256 check those packages, plus other `.rhlw-*` JARs in the SBOMs
+- [ ] 4. Report the markdown table
 ```
-
-From pom.xml (standalone / consumer CI):
 
 ```bash
-python3 "$SKILL/../upgrade-directs/scripts/plan.py" \
-  --pom pom.xml -o /tmp/direct-plan.json
 source "$SHARED/_load-creds.sh" || exit 1
-python3 "$SHARED/coords_from_pom.py" --pom pom.xml \
-| bash "$SHARED/verify-sboms.sh" --batch --from-plan /tmp/direct-plan.json
+bash "$SHARED/verify-sboms.sh" --pom pom.xml
 ```
 
-From an upgrade apply JSON (preferred after Apply). Re-run Plan so versions
-match the updated pom:
+Stdout is a markdown table, same shape as the upgrade summaries. Report it
+as-is. `No packages checked.` when nothing was hashed. When the SBOM and local
+SHA-256 match, the hash is printed once. A mismatch prints both. A download
+failure prints the HTTP status instead of a hash.
 
-```bash
-python3 "$SKILL/../upgrade-directs/scripts/plan.py" \
-  --pom pom.xml -o /tmp/direct-plan.json
-source "$SHARED/_load-creds.sh" || exit 1
-python3 "$SHARED/coords_from_apply.py" \
-  --from-apply /tmp/direct-apply.json \
-| bash "$SHARED/verify-sboms.sh" --batch --from-plan /tmp/direct-plan.json
+```markdown
+## SBOM SHA-256
+
+| Status | Package | Catalog | Detail |
+|------|------|------|------|
+| OK | `org.json:json:20220320.0.0.rhlw-00003` | remediated | `<sha256>` |
+| sbom-download | `commons-io:commons-io:2.11.0.rhlw-00011` | remediated | HTTP 404 |
+| mismatch | `commons-io:commons-io:2.11.0` | remediated | SBOM `<sbom sha256>` / local `<local sha256>` |
 ```
-
-Stdout is a markdown table. Report it as-is. `No packages checked.` when
-nothing was hashed.
-
-| Status | SBOM | Package | SBOM SHA-256 | Local SHA-256 |
-| ------ | ---- | ------- | ------------ | ------------- |
-| OK | remediated org.json:json:1.0.0.rhlw-00001 | org.json:json:1.0.0.rhlw-00001 | `<sha256>` | `<sha256>` |
-| mismatch | remediated org.json:json:1.0.0.rhlw-00001 | commons-io:commons-io:2.11.0 | `<sbom sha256>` | `<local sha256>` |
 
 `Status` is `OK`, `mismatch`, or an SBOM failure (`sbom-download`,
 `sbom-parse`, `not-cyclonedx`, `bad-catalog`). Workers:
@@ -80,7 +70,8 @@ nothing was hashed.
 ## Do not
 
 - Diagnose why a SHA-256 mismatched
-- Hash an SBOM component that is not in the directs plan
+- Skip a promoted `.rhlw-*` dependency
+- Hash a component that is neither a `.rhlw-*` build nor one of the pom's Lightwell packages
 - Fail when a JAR is missing from the local repo
 - Download jars that are not already in the local repo
 - Compare any hash other than SHA-256

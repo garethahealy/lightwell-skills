@@ -220,21 +220,9 @@ Use `cosign verify-blob-attestation` (not `verify-blob`) with the shipped key
 
 ## SBOMs
 
-From apply JSON (preferred after upgrade Apply). Re-run the directs Plan so
-versions match the updated pom:
-
 ```bash
-python3 "$SKILL/../upgrade-directs/scripts/plan.py" \
-  --pom pom.xml -o /tmp/direct-plan.json
-python3 "$SHARED/coords_from_apply.py" \
-  --from-apply /tmp/direct-apply.json \
-| bash "$SHARED/verify-sboms.sh" --batch --from-plan /tmp/direct-plan.json
-```
-
-Or stdin coordinates with the same plan:
-
-```bash
-bash "$SHARED/verify-sboms.sh" --batch --from-plan /tmp/direct-plan.json
+source "$SHARED/_load-creds.sh" || exit 1
+bash "$SHARED/verify-sboms.sh" --pom pom.xml
 ```
 
 SBOM URL (same version directory as the jar):
@@ -243,11 +231,15 @@ SBOM URL (same version directory as the jar):
 …/api/pulp-content/lightwell/java/{catalog}/{groupPath}/{artifactId}/{version}/{artifactId}-{version}.cyclonedx.json
 ```
 
-Use the upgrade-directs plan (`dependencies[]`), then compare SHA-256 only for
-main JARs (no classifier) that appear in both that plan and the CycloneDX
-SBOM. Skip a JAR that is not in the local Maven repository, and skip a
-component with no SHA-256. The only package failure is Status `mismatch`.
-Stdout is a markdown table with the SBOM SHA-256 and the local SHA-256. See
+`--pom` selects remediated directs and promoted dependencies whose version is
+`.rhlw-*`, plus validated dependencies with a Lightwell source URL. Extra
+coordinates can be passed on the command line or via `--batch`. Compare
+SHA-256 for those packages and for any other main JAR (no classifier) in the
+downloaded SBOM whose version is `.rhlw-*`. Skip a JAR that is not in the
+local Maven repository, and skip a component with no SHA-256. Status
+`mismatch` and SBOM failures exit non-zero. `sbom-download` includes the HTTP
+status; HTTP 404 means that build publishes no CycloneDX file. Stdout is a
+markdown table, same shape as the upgrade summaries. See
 [verify-sboms](../verify-sboms/SKILL.md).
 
 ## OSV

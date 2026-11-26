@@ -9,11 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from lightwell_shared.directs_plan import build_direct_plan
 from lightwell_shared.download_http import HttpAuthError
 from lightwell_shared.lightwell_urls import sbom_url
 from lightwell_shared.mvn_run import maven_binary
-from lightwell_shared.verify_sboms import load_sbom, plan_coords, sbom_cache_root, verify_one
+from lightwell_shared.verify_sboms import format_report, lightwell_coordinates, load_sbom, sbom_cache_root, verify_one
 from lightwell_shared.verify_sboms import main as verify_main
 
 CATALOG = "remediated"
@@ -283,7 +282,7 @@ def test_sbom_download_and_missing_local_jar(tmp_path: Path, monkeypatch: pytest
     local_repo = tmp_path / "m2"
     cache = tmp_path / "cache"
     monkeypatch.setattr("lightwell_shared.verify_sboms.download_to_path", lambda *_a, **_k: 404)
-    assert _verify(local_repo, cache) == [_row("sbom-download", GAV, ok=False)]
+    assert _verify(local_repo, cache) == [_row("sbom-download", GAV, "HTTP 404", ok=False)]
 
     def write_sbom(url: str, dest: Path, username: str, token: str) -> int:
         del url, username, token
@@ -308,14 +307,51 @@ def test_auth_error_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         _verify(local_repo, tmp_path / "cache")
 
 
-def test_plan_coords_match_directs_plan() -> None:
+def test_lightwell_coordinates_keep_promoted_builds() -> None:
     pom = Path(__file__).resolve().parent / "fixtures" / "sample_pom.xml"
-    plan = build_direct_plan(pom.read_text(encoding="utf-8"), pom)
-    coords = plan_coords(plan)
-    assert ("org.json", "json", "20220320") in coords
-    assert ("commons-fileupload", "commons-fileupload", "1.5") in coords
-    assert ("commons-io", "commons-io", "2.11.0.rhlw-00001") not in coords
-    assert ("junit", "junit", "4.13.2") not in coords
+    from lightwell_shared.coords_from_pom import coords_from_pom
+
+    rows = lightwell_coordinates([], coords_from_pom(pom.read_text(encoding="utf-8")))
+    assert ("remediated", "commons-io", "commons-io", "2.11.0.rhlw-00001") in rows
+    assert ("validated", "com.fasterxml.jackson.dataformat", "jackson-dataformat-yaml", "2.19.4") in rows
+    assert ("remediated", "org.json", "json", "20220320") not in rows
+    assert all(row[1] != "junit" for row in rows)
+
+
+def test_rhlw_component_is_hashed_without_being_requested(tmp_path: Path) -> None:
+    local_repo = tmp_path / "m2"
+    subject = _put(local_repo, GROUP, ARTIFACT, VERSION, b"subject-jar")
+    wood = _put(local_repo, "com.fasterxml.woodstox", "woodstox-core", "6.0.3.rhlw-00001", b"woodstox")
+    cache = tmp_path / "cache"
+    _seed(
+        cache,
+        _bom(
+            [_component("com.fasterxml.woodstox", "woodstox-core", "6.0.3.rhlw-00001", wood)],
+            metadata=_component(GROUP, ARTIFACT, VERSION, subject, ref=ROOT_REF),
+        ),
+    )
+    lines = _verify(local_repo, cache, {(GROUP, ARTIFACT, VERSION)})
+    assert _row("OK", GAV, subject, subject, ok=True) in lines
+    assert (
+        "| OK | remediated org.json:json:1.0.0.rhlw-00001 | com.fasterxml.woodstox:woodstox-core:6.0.3.rhlw-00001"
+        f" | {wood} | {wood} |"
+    ) in [line for line, _ok in lines]
+
+
+def test_format_report_matches_upgrade_summary_table() -> None:
+    ok_sha = "ab" * 32
+    other = "commons-io:commons-io:2.11.0.rhlw-00011"
+    rows = [
+        (f"| OK | {CATALOG} {GAV} | {GAV} | {ok_sha} | {ok_sha} |", True),
+        (f"| sbom-download | {CATALOG} {other} | {other} | HTTP 404 |  |", False),
+        (f"| mismatch | {CATALOG} {GAV} | {GAV} | {'ff' * 32} | {ok_sha} |", False),
+    ]
+    report = format_report(rows)
+    assert report.startswith("## SBOM SHA-256\n\n")
+    assert "| Status | Package | Catalog | Detail |\n|------|------|------|------|\n" in report
+    assert f"| OK | `{GAV}` | remediated | `{ok_sha}` |" in report
+    assert f"| sbom-download | `{other}` | remediated | HTTP 404 |" in report
+    assert f"| mismatch | `{GAV}` | remediated | SBOM `{'ff' * 32}` / local `{ok_sha}` |" in report
 
 
 def test_sbom_only_package_is_not_hashed(tmp_path: Path) -> None:
@@ -398,15 +434,14 @@ def test_main_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     settings.write_text("<settings/>\n", encoding="utf-8")
     subject = _put(local_repo, GROUP, ARTIFACT, VERSION, b"subject-jar")
     cache = tmp_path / "cache"
-    plan = tmp_path / "direct-plan.json"
-    plan.write_text(
-        json.dumps(
-            {
-                "dependencies": [
-                    {"groupId": GROUP, "artifactId": ARTIFACT, "version": VERSION},
-                ]
-            }
-        ),
+    pom = tmp_path / "pom.xml"
+    pom.write_text(
+        """<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>t</groupId><artifactId>t</artifactId><version>1</version>
+</project>
+""",
         encoding="utf-8",
     )
     _seed(cache, _bom([], metadata=_component(GROUP, ARTIFACT, VERSION, subject, ref=ROOT_REF)))
@@ -425,8 +460,8 @@ def test_main_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
             str(settings),
             "--local-repo",
             str(local_repo),
-            "--from-plan",
-            str(plan),
+            "--pom",
+            str(pom),
             CATALOG,
             GROUP,
             ARTIFACT,
@@ -436,13 +471,78 @@ def test_main_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     try:
         assert verify_main() == 0
         report = capsys.readouterr().out
-        assert report.startswith("| Status | SBOM | Package | SBOM SHA-256 | Local SHA-256 |")
-        assert f"| OK | {CATALOG} {GAV} | {GAV} | {subject} | {subject} |" in report
+        assert report.startswith("## SBOM SHA-256\n")
+        assert f"| OK | `{GAV}` | remediated | `{subject}` |" in report
 
         _seed(cache, _bom([], metadata=_component(GROUP, ARTIFACT, VERSION, "ff" * 20, ref=ROOT_REF)))
         assert verify_main() == 1
         report = capsys.readouterr().out
         local_sha = hashlib.sha256(b"subject-jar").hexdigest()
-        assert f"| mismatch | {CATALOG} {GAV} | {GAV} | {'ff' * 20} | {local_sha} |" in report
+        assert f"| mismatch | `{GAV}` | remediated | SBOM `{'ff' * 20}` / local `{local_sha}` |" in report
+    finally:
+        maven_binary.cache_clear()
+
+
+def test_main_checks_promoted_rhlw_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    local_repo = tmp_path / "m2"
+    settings = tmp_path / "settings.xml"
+    settings.write_text("<settings/>\n", encoding="utf-8")
+    version = "6.0.3.rhlw-00001"
+    sha = _put(local_repo, "com.fasterxml.woodstox", "woodstox-core", version, b"woodstox")
+    cache = tmp_path / "cache"
+    dest = (
+        cache
+        / CATALOG
+        / "com/fasterxml/woodstox"
+        / "woodstox-core"
+        / version
+        / f"woodstox-core-{version}.cyclonedx.json"
+    )
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(
+        json.dumps(_bom([], metadata=_component("com.fasterxml.woodstox", "woodstox-core", version, sha))),
+        encoding="utf-8",
+    )
+    pom = tmp_path / "pom.xml"
+    pom.write_text(
+        """<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>t</groupId><artifactId>t</artifactId><version>1</version>
+  <dependencies>
+    <!-- Transitive of org.json:json -->
+    <!-- Source: https://packages.redhat.com/api/pulp-content/lightwell/java/remediated/ -->
+    <dependency>
+      <groupId>com.fasterxml.woodstox</groupId>
+      <artifactId>woodstox-core</artifactId>
+      <version>6.0.3.rhlw-00001</version>
+    </dependency>
+  </dependencies>
+</project>
+""",
+        encoding="utf-8",
+    )
+    maven_binary.cache_clear()
+    monkeypatch.setenv("LIGHTWELL_MVN", sys.executable)
+    monkeypatch.setenv("LIGHTWELL_USERNAME", "user")
+    monkeypatch.setenv("LIGHTWELL_TOKEN", "token")
+    monkeypatch.setenv("LIGHTWELL_SBOM_CACHE_DIR", str(cache))
+
+    def fail_download(*_args: object, **_kwargs: object) -> int:
+        raise AssertionError("download")
+
+    monkeypatch.setattr("lightwell_shared.verify_sboms.download_to_path", fail_download)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["verify_sboms.py", "--settings", str(settings), "--local-repo", str(local_repo), "--pom", str(pom)],
+    )
+    try:
+        assert verify_main() == 0
+        report = capsys.readouterr().out
+        assert "com.fasterxml.woodstox:woodstox-core:6.0.3.rhlw-00001" in report
+        assert sha in report
     finally:
         maven_binary.cache_clear()
