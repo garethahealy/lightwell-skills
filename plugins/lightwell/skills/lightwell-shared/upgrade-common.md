@@ -43,8 +43,9 @@ These skills are **scripted pipelines**. Run them; do not investigate them.
 - Treat script stdout / JSON as authoritative. Report results; do not
   reinterpret, second-guess, or “improve” them.
 - Documented stops only: **ASK** gate after Collect (SemVer); **AUTH_FAILED** /
-  HTTP 401/403 (metadata or OSV). Otherwise, if a phase exits non-zero:
-  **stop**, show the relevant stderr/stdout, and wait for the user.
+  HTTP 401/403 (metadata or OSV); **TERMS_REQUIRED** / HTTP 428. Otherwise, if a
+  phase exits non-zero: **stop**, show the relevant stderr/stdout, and wait
+  for the user.
 - Do **not** use git history (`git log`, `git show`, `git blame`, historical
   `git diff`) to explain outcomes.
 - Do **not** diagnose why Collect returned empty/`KEEP`/`MISSING`/`DROP`, why
@@ -83,8 +84,11 @@ auto-applied by `--take-latest`.
 - Do **not** read `.gitignore` / `.cursorignore` paths (creds, `.m2/`). Skill and
   `lightwell-shared` scripts are allowed (to **run**, not to debug).
 - Load secrets via `_load-creds.sh` only — never Read/print `LIGHTWELL_*`.
-- If packages.redhat.com returns **HTTP 403** (or 401), **stop**. Tell the user
-  to validate `LIGHTWELL_TOKEN`. Do not continue or treat as `MISSING`.
+- If a Lightwell call returns **HTTP 401/403**, **stop**. Tell the user to
+  validate `LIGHTWELL_TOKEN`. Do not continue or treat as `MISSING`.
+- If the Lightwell API returns **HTTP 428** or terms are still required,
+  **stop**. The helper prints `TERMS_REQUIRED: accept Lightwell terms before
+  continuing`. Do not treat that as `MISSING`.
 - Always `--batch-mode --no-transfer-progress --settings=.m2/settings.xml`.
   Prefers `mvnd` when on `PATH` (`LIGHTWELL_MVN` to override).
 - Do not commit unless asked.
@@ -128,4 +132,6 @@ python3 "$SHARED/coords_from_apply.py" \
 - Skip Plan/Collect and edit the pom from guesses
 - Continue after `AUTH_FAILED` / HTTP 403 — stop and ask the user to validate
   `LIGHTWELL_TOKEN`
+- Continue after `TERMS_REQUIRED` / HTTP 428 — stop and ask the user to accept
+  Lightwell terms
 - Print secrets; invent `.rhlw-*` / CVEs; scrape packages.redhat.com HTML

@@ -4,11 +4,19 @@ from __future__ import annotations
 
 from lightwell_shared.lightwell_urls import (
     CONTENT_ROOT,
+    DEFAULT_API_ROOT,
+    api_root,
     java_catalog_base,
     maven_metadata_url,
     provenance_bundle_url,
     sbom_url,
 )
+
+
+def test_default_api_root(monkeypatch) -> None:
+    assert DEFAULT_API_ROOT == "https://console.redhat.com/api/lightwell/v0.1"
+    monkeypatch.setenv("LIGHTWELL_API_ROOT", "https://example.test/api/lightwell/v0.1/")
+    assert api_root() == "https://example.test/api/lightwell/v0.1"
 
 
 def test_default_content_root() -> None:

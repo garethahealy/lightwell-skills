@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 
+from lightwell_shared.lightwell_api import TermsRequiredError
 from lightwell_shared.pom_lib import ask_reason, is_newer, needs_ask
 from lightwell_shared.resolve_metadata import (
     AuthFailedError,
@@ -44,7 +45,7 @@ def try_resolve(
             username=username,
             token=token,
         )
-    except AuthFailedError:
+    except AuthFailedError, TermsRequiredError:
         raise
     except MetadataError:
         return None
@@ -349,9 +350,9 @@ def main() -> int:
             deps,
             work,
             max_workers=args.jobs,
-            cancel_on=AuthFailedError,
+            cancel_on=(AuthFailedError, TermsRequiredError),
         )
-    except AuthFailedError as exc:
+    except (AuthFailedError, TermsRequiredError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 

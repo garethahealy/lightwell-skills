@@ -19,10 +19,9 @@ Batch mode prints: catalog groupId:artifactId -> version
   (batch lines: catalog groupId artifactId currentVersion).
 
 Credentials from LIGHTWELL_USERNAME / LIGHTWELL_TOKEN (never printed).
-Cache stores response bodies and validators only (etag, fetched_at, tag values,
-same-base sidecars, negative markers). Never uses HTTP Expires / Cache-Control
-response headers for cache decisions. HTTPS uses a keep-alive connection pool
-with redirect following and in-flight GET coalescing (see http_pool.py).
+Version lists come from the Lightwell API and are cached as maven-metadata.xml
+(etag, fetched_at, tag values, same-base sidecars, negative markers). Never uses
+HTTP Expires / Cache-Control response headers for cache decisions.
 Requires Python 3.14+ (skill pin; no version fallbacks).
 """
 
@@ -36,19 +35,19 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import unquote
 
-from lightwell_shared.http_pool import HttpFetchError, basic_auth_header, shared_https_pool
+from lightwell_shared.download_http import HttpAuthError
+from lightwell_shared.lightwell_api import (
+    ApiError,
+    PackageNotFound,
+    TermsRequiredError,
+    java_package_metadata_xml,
+)
 from lightwell_shared.lightwell_urls import maven_metadata_url
 from lightwell_shared.pom_lib import RHLW_RE, semver_triple
 from lightwell_shared.runtime import require_python
 from lightwell_shared.thread_jobs import map_threaded
-
-# Bust intermediary caches on fetch (avoid stale 302 Location with expired S3
-# Expires= query params). Not used for local disk-cache decisions.
-_NO_STORE_HEADERS = {
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-}
 
 _DEFAULT_JOBS = int(os.environ.get("LIGHTWELL_METADATA_JOBS", "16"))
 
@@ -252,25 +251,48 @@ def clear_negative(cdir: Path) -> None:
     (cdir / "negative").unlink(missing_ok=True)
 
 
+def _coords_from_metadata_url(url: str) -> tuple[str, str, str]:
+    """Return ``(catalog, groupId, artifactId)`` from a pulp metadata URL."""
+    path = url.split("?", 1)[0]
+    marker = "/java/"
+    index = path.find(marker)
+    if index < 0 or not path.endswith("/maven-metadata.xml"):
+        raise MetadataError("METADATA_FETCH_FAILED: bad metadata url")
+    parts = [unquote(part) for part in path[index + len(marker) :].split("/") if part]
+    if len(parts) < 4 or parts[-1] != "maven-metadata.xml":
+        raise MetadataError("METADATA_FETCH_FAILED: bad metadata url")
+    catalog = parts[0]
+    artifact_id = parts[-2]
+    group_id = ".".join(parts[1:-2])
+    if catalog not in {"remediated", "validated"} or not group_id or not artifact_id:
+        raise MetadataError("METADATA_FETCH_FAILED: bad metadata url")
+    return catalog, group_id, artifact_id
+
+
 def fetch_metadata_http(
     url: str,
     username: str,
     token: str,
     etag: str | None,
 ) -> tuple[int, str, dict[str, str]]:
-    """Return (http_code, body, response_headers).
+    """Return ``(http_code, maven-metadata.xml, headers)`` from the Lightwell API.
 
-    Uses a process-wide pooled HTTPS client (keep-alive + redirect follow +
-    in-flight GET coalescing). No curl subprocess.
+    ``etag`` is ignored. The API has no pulp validator; disk TTL still applies
+    before this function is called. Tests patch this seam.
     """
-    headers = dict(_NO_STORE_HEADERS)
-    headers["Authorization"] = basic_auth_header(username, token)
-    if etag:
-        headers["If-None-Match"] = etag
+    del etag
+    catalog, group_id, artifact_id = _coords_from_metadata_url(url)
     try:
-        return shared_https_pool().request(url, headers=headers, method="GET")
-    except HttpFetchError as exc:
+        xml = java_package_metadata_xml(catalog, group_id, artifact_id, username, token)
+    except HttpAuthError as exc:
+        return exc.code, "", {}
+    except PackageNotFound:
+        return 404, "", {}
+    except TermsRequiredError:
+        raise
+    except ApiError as exc:
         raise MetadataError(f"METADATA_FETCH_FAILED: {exc}") from exc
+    return 200, xml, {}
 
 
 def resolve_one(
@@ -588,7 +610,7 @@ def main() -> int:
                     token=token,
                 )
                 return key, payload, None
-            except AuthFailedError:
+            except AuthFailedError, TermsRequiredError:
                 raise
             except MetadataError as exc:
                 return key, None, str(exc)
@@ -597,7 +619,7 @@ def main() -> int:
             coords,
             work,
             max_workers=args.jobs,
-            cancel_on=AuthFailedError,
+            cancel_on=(AuthFailedError, TermsRequiredError),
         ):
             if err or payload_or_none is None:
                 if err and is_auth_error(err):
@@ -615,6 +637,9 @@ def main() -> int:
                 print(f"{c} {g}:{a} -> MISSING")
 
         return 1 if errors else 0
+    except TermsRequiredError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     except AuthFailedError as exc:
         print(str(exc), file=sys.stderr)
         return exc.code

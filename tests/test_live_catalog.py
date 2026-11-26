@@ -29,7 +29,7 @@ from lightwell_shared.fetch_osv import fetch_osv_lines_for_bumps
 from lightwell_shared.lightwell_urls import maven_metadata_url, provenance_bundle_url, sbom_url
 from lightwell_shared.mvn_run import run_dependency_tree, run_mvn
 from lightwell_shared.pom_lib import indexes_by_via_direct
-from lightwell_shared.resolve_metadata import resolve_payload
+from lightwell_shared.resolve_metadata import extract_tag, extract_versions, fetch_metadata_http, resolve_payload
 from lightwell_shared.verify_attestations import verify_one
 
 pytestmark = pytest.mark.live
@@ -85,7 +85,11 @@ def test_live_metadata_and_collect(
     meta_url = maven_metadata_url("remediated", DEMO_JSON_G, DEMO_JSON_A)
     status, body, _headers = auth_get(meta_url, user, token)
     assert status == 200, status
-    assert "<version>" in body
+    code, synthetic, _headers = fetch_metadata_http(meta_url, user, token, None)
+    assert code == 200, code
+    assert set(extract_versions(synthetic)) == set(extract_versions(body))
+    assert extract_tag(synthetic, "latest") == extract_tag(body, "latest")
+    assert extract_tag(synthetic, "release") == extract_tag(body, "release")
     assert json_ver
 
     row = collect_one(
@@ -122,6 +126,14 @@ def test_live_osv(lightwell_creds: tuple[str, str], json_ver: str) -> None:
         assert parts[3].startswith("fixed=")
         assert parts[4].startswith("osv=")
         assert "pulp-content/lightwell" in parts[4]
+        osv_url = parts[4].removeprefix("osv=")
+        adv_status, adv_body, _headers = auth_get(osv_url, user, token)
+        assert adv_status == 200, adv_status
+        advisory = json.loads(adv_body)
+        label = parts[1]
+        aliases = [alias for alias in (advisory.get("aliases") or []) if isinstance(alias, str)]
+        assert label == advisory.get("id") or label in aliases
+        assert parts[3].removeprefix("fixed=") in adv_body
 
 
 @_PROVENANCE_SKIP

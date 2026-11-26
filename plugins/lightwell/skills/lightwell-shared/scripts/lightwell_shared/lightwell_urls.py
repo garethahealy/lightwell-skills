@@ -21,6 +21,13 @@ SOURCE_URL = {
 
 OSV_REMEDIATED_BASE = f"{CONTENT_ROOT}/osv/java/remediated"
 
+DEFAULT_API_ROOT = "https://console.redhat.com/api/lightwell/v0.1"
+
+
+def api_root() -> str:
+    """Lightwell API v0.1 base. Override with ``LIGHTWELL_API_ROOT``."""
+    return os.environ.get("LIGHTWELL_API_ROOT", DEFAULT_API_ROOT).rstrip("/")
+
 
 def java_catalog_base(catalog: str) -> str:
     """Return trailing-slash base URL for a java catalog (remediated|validated)."""

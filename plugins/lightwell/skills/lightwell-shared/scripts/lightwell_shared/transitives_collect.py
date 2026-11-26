@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from lightwell_shared.lightwell_api import TermsRequiredError
 from lightwell_shared.mvn_run import run_dependency_tree
 from lightwell_shared.pom_lib import (
     ask_reason,
@@ -66,7 +67,7 @@ def meta_lookup(
             token=token,
         )
         return MetaResult(ok=True, version=version)
-    except AuthFailedError:
+    except AuthFailedError, TermsRequiredError:
         raise
     except MetadataError as exc:
         return MetaResult(ok=False, error=str(exc) if str(exc) else "MISSING")
@@ -488,10 +489,10 @@ def main() -> int:
                 queries,
                 work,
                 max_workers=args.jobs,
-                cancel_on=AuthFailedError,
+                cancel_on=(AuthFailedError, TermsRequiredError),
             ):
                 metadata[key] = val
-        except AuthFailedError as exc:
+        except (AuthFailedError, TermsRequiredError) as exc:
             print(str(exc), file=sys.stderr)
             return 1
 

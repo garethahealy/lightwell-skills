@@ -50,15 +50,23 @@ echo "CREDS_OK"
 - **HTTP 401/403:** stop immediately. Tell the user to validate `LIGHTWELL_TOKEN`
   (do not treat as MISSING / continue Collect → Apply → Summary). Helpers print
   `AUTH_FAILED: HTTP … — validate LIGHTWELL_TOKEN`.
+- **HTTP 428** or terms still required: stop immediately. Do not treat as
+  `MISSING`. Helpers print
+  `TERMS_REQUIRED: accept Lightwell terms before continuing`.
 
 ## Runtime
 
 **Bash 5+**, **Python 3.14+** (CLIs exit 2 if older; same pin as plugin CI),
 **jq**. Transitive plan, apply, and SBOM checks need **Maven**.
 Attestations need **cosign**. SBOM checks hash files already in the local
-Maven repository. Access: content URLs + disk cache — not pulp-cli / Pulp
-admin APIs. HTTPS via `http_pool.py` (metadata, OSV, provenance, and SBOM
-download) with `Cache-Control: no-cache` / `Pragma: no-cache`.
+Maven repository. Version lists and remediated OSV advisories come from the
+Lightwell API (`LIGHTWELL_API_ROOT`, default
+`https://console.redhat.com/api/lightwell/v0.1`) with the same
+`LIGHTWELL_USERNAME` / `LIGHTWELL_TOKEN`. The client probes
+`GET /terms/required` with `Authorization: Bearer`, then HTTP Basic, and keeps
+the first form that returns 200. Jar download, provenance, and CycloneDX
+SBOMs stay on pulp content URLs. HTTPS via `http_pool.py` uses
+`Cache-Control: no-cache` / `Pragma: no-cache`. Not pulp-cli / Pulp admin APIs.
 
 ## Catalogs
 
@@ -69,13 +77,16 @@ download) with `Cache-Control: no-cache` / `Pragma: no-cache`.
 
 Do not open `.m2/settings.xml`.
 
-Metadata:
-
-```text
-https://packages.redhat.com/api/pulp-content/lightwell/java/{remediated|validated}/{groupPath}/{artifactId}/maven-metadata.xml
-```
-
-`groupPath` = `groupId` with `.` → `/`.
+Version lists: page `GET /repositories?content_type=maven`, then
+`GET /repositories/{uuid}/java_packages/{group}/{name}` (`{group}` is the dotted
+groupId). The UUID is the single repository whose `published_distribution_url`
+or `url` is that catalog base. If the maven filter returns none, the client
+lists repositories again without it and still requires exactly one URL match.
+Several matches is a fetch failure.
+Collect still selects Maven `<latest>` / `<release>` and the highest same-base
+`.rhlw-*` from the published `version` and `builds[].version` strings. Those
+results are cached as `maven-metadata.xml` plus the `latest` sidecar. An empty
+version list is `METADATA_EMPTY`. HTTP 404 is `METADATA_FETCH_FAILED`.
 
 Catalog inference: `Source:` URL → version `*.rhlw-*` → else probe **remediated
 same-base first**, then validated latest. Same-base matching uses SemVer
@@ -97,7 +108,7 @@ Plan / collect / apply JSON includes `schemaVersion` (currently `1`).
 | `_repo.sh` | Consumer repo root (creds file lookup) |
 | `lightwell_shared/` | Library: URLs, http_pool, metadata, OSV, pom, apply/summary, attest, sbom |
 | `resolve_metadata.py` | Metadata fetch/cache CLI shim |
-| `fetch_osv.py` | Remediated OSV fetch CLI shim (http_pool) |
+| `fetch_osv.py` | Remediated advisory fetch CLI shim (Lightwell API) |
 | `download_http.py` | Authenticated file / provenance / SBOM download CLI shim |
 | `format-osv-table.py` | Markdown table / PR comment from OSV lines |
 | `verify-attestations.sh` | Creds + `verify_attestations.py` (cosign SLSA) |
@@ -129,9 +140,9 @@ use HTTP `Expires` / `Cache-Control` for disk-cache decisions.
 
 | Cache | Path | Notes |
 |-------|------|-------|
-| Metadata | `lightwell-metadata/` | TTL default **3600** + ETag; negatives; same-base; memo; pooled HTTPS |
+| Metadata | `lightwell-metadata/` | TTL default **3600**; synthetic maven-metadata; negatives; same-base; memo |
 | Natural trees | `lightwell-natural/` | TTL default **3600**; one Maven tree for all miss parents |
-| OSV | `lightwell-osv/` | Manifest TTL default **3600** + advisory checksums |
+| OSV | `lightwell-osv/` | Per-package advisory JSON, TTL default **3600** |
 | Provenance | `lightwell-provenance/` | Reuse bundle if present |
 | SBOM | `lightwell-sbom/` | Reuse `{artifactId}-{version}.cyclonedx.json` if present |
 
@@ -222,7 +233,11 @@ python3 "$SHARED/fetch_osv.py" <g> <a> <from> <to> …
 …/format-osv-table.py --comment < osv-lines
 ```
 
-Stdout: `g:a|CVE-…|summary|fixed=<to>|osv=<url>`. Do not invent CVEs.
+`fetch_osv.py` reads
+`GET /advisories?package_name={group}:{artifact}&repository={remediated repo name}`.
+It does not send `package_version`, `cve_id`, or `latest_release`.
+Stdout: `g:a|CVE-…|summary|fixed=<to>|osv=<url>`. The `osv=` URL stays
+`{OSV_REMEDIATED_BASE}/{advisory_id}.json` on packages.redhat.com. Do not invent CVEs.
 
 ## Promoted transitives
 

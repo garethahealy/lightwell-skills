@@ -1,7 +1,8 @@
-"""Fetch Lightwell remediated OSV advisories and match version bumps.
+"""Fetch Lightwell remediated advisories and match version bumps.
 
 Credentials from LIGHTWELL_USERNAME / LIGHTWELL_TOKEN (never printed).
-Uses http_pool via download_http.
+Reads GET /advisories on the Lightwell API. Stdout lines still point ``osv=``
+at the remediated advisory JSON on packages.redhat.com.
 
 Usage:
   fetch_osv.py <groupId> <artifactId> <fromVersion> <toVersion> [...]
@@ -17,21 +18,17 @@ import argparse
 import hashlib
 import json
 import os
-import re
-import shutil
 import sys
-import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 import lightwell_shared.match_osv_cves as matcher
-from lightwell_shared.download_http import HttpAuthError, auth_get, download_to_path, header_value
+from lightwell_shared.download_http import HttpAuthError
+from lightwell_shared.lightwell_api import ApiError, TermsRequiredError, list_advisories
 from lightwell_shared.lightwell_urls import OSV_REMEDIATED_BASE
-from lightwell_shared.match_osv_cves import advisories_for_bumps, load_bumps
 from lightwell_shared.runtime import require_python
 from lightwell_shared.thread_jobs import map_threaded
-
-_JSON_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.json$")
 
 
 def osv_cache_root(*, no_cache: bool) -> Path | None:
@@ -44,204 +41,128 @@ def osv_cache_root(*, no_cache: bool) -> Path | None:
     return Path(xdg) / "lightwell-osv"
 
 
-def parse_manifest(manifest: str) -> list[tuple[str, str]]:
-    """Return [(filename, checksum), ...] for advisory JSON entries."""
-    out: list[tuple[str, str]] = []
-    for line in manifest.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        name, _, rest = line.partition(",")
-        checksum, _, _ = rest.partition(",")
-        if not _JSON_NAME_RE.match(name) or not checksum:
-            continue
-        out.append((name, checksum))
-    return out
+def _cache_path(cache_dir: Path, package: str) -> Path:
+    digest = hashlib.sha256(package.encode("utf-8")).hexdigest()[:16]
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in package)
+    return cache_dir / "packages" / f"{safe}-{digest}.json"
 
 
-def load_manifest(
-    *,
-    cache_dir: Path | None,
-    ttl: int,
-    username: str,
-    token: str,
-    verbose: bool,
-) -> str:
-    base = OSV_REMEDIATED_BASE
-    manifest_url = f"{base}/PULP_MANIFEST"
-    man_path = cache_dir / "PULP_MANIFEST" if cache_dir else None
-    fetched_path = cache_dir / "PULP_MANIFEST.fetched_at" if cache_dir else None
-    etag_path = cache_dir / "PULP_MANIFEST.etag" if cache_dir else None
-
-    if man_path and fetched_path and man_path.is_file() and fetched_path.is_file():
-        try:
-            age = time.time() - int(fetched_path.read_text(encoding="utf-8").strip())
-        except ValueError:
-            age = ttl + 1
-        if 0 <= age < ttl and man_path.stat().st_size > 0:
-            if verbose:
-                print("Manifest cache hit (TTL)", file=sys.stderr)
-            return man_path.read_text(encoding="utf-8")
-
-    etag = None
-    if etag_path and etag_path.is_file():
-        etag = etag_path.read_text(encoding="utf-8").strip() or None
-
-    status, body, headers = auth_get(manifest_url, username, token, etag=etag)
-
-    if status == 304 and man_path and man_path.is_file():
-        if cache_dir is not None:
-            (cache_dir / "PULP_MANIFEST.fetched_at").write_text(str(int(time.time())), encoding="utf-8")
-        if verbose:
-            print("Manifest cache revalidated (304)", file=sys.stderr)
-        return man_path.read_text(encoding="utf-8")
-
-    if status != 200 or not body.strip():
-        print(f"MANIFEST_FETCH_FAILED: HTTP {status}", file=sys.stderr)
-        raise SystemExit(1)
-
-    if cache_dir is not None:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        (cache_dir / "advisories").mkdir(parents=True, exist_ok=True)
-        (cache_dir / "PULP_MANIFEST").write_text(body, encoding="utf-8")
-        (cache_dir / "PULP_MANIFEST.fetched_at").write_text(str(int(time.time())), encoding="utf-8")
-        new_etag = header_value(headers, "etag")
-        if new_etag:
-            (cache_dir / "PULP_MANIFEST.etag").write_text(new_etag + "\n", encoding="utf-8")
-
-    return body
-
-
-def filter_names_via_index(
-    names: list[str],
-    *,
-    cache_dir: Path,
-    manifest_id: str,
-    bumps_file: Path,
-    verbose: bool,
-) -> list[str]:
-    index_path = cache_dir / "package-index.json"
-    if not index_path.is_file():
-        return names
+def _read_cached(path: Path, ttl: int) -> list[dict[str, Any]] | None:
+    if not path.is_file():
+        return None
     try:
-        cached = json.loads(index_path.read_text(encoding="utf-8"))
-    except Exception:
-        return names
-    if cached.get("manifest_id") != manifest_id:
-        return names
-    bumps = load_bumps(bumps_file)
-    relevant = set(advisories_for_bumps(cached, bumps))
-    if not relevant:
-        return names
-    filtered = [n for n in names if n in relevant]
-    if filtered:
-        if verbose:
-            print(
-                f"Using package-index filter: {len(filtered)}/{len(names)} advisories",
-                file=sys.stderr,
-            )
-        return filtered
+        data = json.loads(path.read_text(encoding="utf-8"))
+        fetched = int(data["fetched_at"])
+        advisories = data["advisories"]
+    except OSError, ValueError, KeyError, TypeError:
+        return None
+    age = time.time() - fetched
+    if age < 0 or age >= ttl or not isinstance(advisories, list):
+        return None
+    return [item for item in advisories if isinstance(item, dict)]
+
+
+def _write_cached(path: Path, advisories: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"fetched_at": int(time.time()), "advisories": advisories}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def package_names(package_name: object) -> set[str]:
+    """Names that identify one Maven package on an advisory record."""
+    if not isinstance(package_name, str):
+        return set()
+    name = package_name.strip()
+    if not name:
+        return set()
+    names = {name}
+    if name.startswith("pkg:maven/"):
+        body = name[len("pkg:maven/") :].split("@", 1)[0]
+        names.add(body.replace("/", ":"))
+    elif "/" in name and not name.startswith("pkg:"):
+        names.add(name.replace("/", ":"))
     return names
 
 
-def fetch_advisories(
-    names: list[str],
-    checksums: dict[str, str],
+def advisory_tuple(package: str, advisory: dict[str, Any]) -> tuple | None:
+    """Map one API advisory onto the tuple ``match_bumps`` already consumes."""
+    names = package_names(advisory.get("package_name"))
+    if package not in names:
+        return None
+    raw_fixes = advisory.get("fixed_versions")
+    fixes: set[str] = set()
+    if isinstance(raw_fixes, list):
+        for item in raw_fixes:
+            if isinstance(item, str) and item:
+                fixes.add(item)
+    if not fixes:
+        return None
+    raw_id = advisory.get("advisory_id")
+    advisory_id = raw_id.strip() if isinstance(raw_id, str) and raw_id.strip() else "UNKNOWN"
+    file_name = advisory_id if advisory_id.endswith(".json") else f"{advisory_id}.json"
+    aliases = advisory.get("aliases")
+    if not isinstance(aliases, list):
+        aliases = []
+    labels = matcher.advisory_labels({"id": advisory_id.removesuffix(".json"), "aliases": aliases})
+    summary = matcher.advisory_summary(
+        {"summary": advisory.get("summary") or "", "details": advisory.get("details") or ""}
+    )
+    url = f"{OSV_REMEDIATED_BASE}/{file_name}"
+    return ([(names, fixes)], labels, summary, url)
+
+
+def match_lines_for_advisories(
+    bumps: list[tuple[str, str, str, str]],
+    advisories_by_package: dict[str, list[dict[str, Any]]],
+) -> list[str]:
+    """Return stdout lines for bumps. Equal from/to pairs are ignored."""
+    triples: list[tuple[str, str, str]] = []
+    tuples: list = []
+    seen_packages: set[str] = set()
+    for group_id, artifact_id, from_ver, to_ver in bumps:
+        if from_ver == to_ver:
+            continue
+        package = f"{group_id}:{artifact_id}"
+        triples.append((package, from_ver, to_ver))
+        if package in seen_packages:
+            continue
+        seen_packages.add(package)
+        rows = advisories_by_package.get(package) or []
+        ordered = sorted(rows, key=lambda item: str(item.get("advisory_id") or ""))
+        for advisory in ordered:
+            parsed = advisory_tuple(package, advisory)
+            if parsed is not None:
+                tuples.append(parsed)
+    return matcher.match_bumps(triples, tuples)
+
+
+def _load_package_advisories(
+    group_id: str,
+    artifact_id: str,
     *,
-    base_url: str,
-    work_dir: Path,
-    cache_dir: Path | None,
     username: str,
     token: str,
-    jobs: int,
-    verbose: bool,
-) -> tuple[int, int]:
-    """Download missing advisories into work_dir. Return (ok_count, fail_count)."""
-    advisories_dir = work_dir / "advisories"
-    advisories_dir.mkdir(parents=True, exist_ok=True)
-    need_fetch: list[str] = []
-
-    for name in names:
-        want_sha = checksums[name]
-        dest = advisories_dir / name
-        if cache_dir:
-            cached = cache_dir / "advisories" / name
-            cached_sha = cache_dir / "advisories" / f"{name}.sha"
-            if (
-                cached.is_file()
-                and cached.stat().st_size > 0
-                and cached_sha.is_file()
-                and cached_sha.read_text(encoding="utf-8").strip() == want_sha
-            ):
-                if dest.exists() or dest.is_symlink():
-                    dest.unlink()
-                try:
-                    os.link(cached, dest)
-                except OSError:
-                    shutil.copy2(cached, dest)
-                continue
-        need_fetch.append(name)
-
-    if verbose:
-        print(
-            f"Advisories: {len(names) - len(need_fetch)} cached, {len(need_fetch)} to fetch (jobs={jobs})",
-            file=sys.stderr,
-        )
-
-    failures: list[str] = []
-
-    def work(_idx: int, name: str) -> tuple[str, bool]:
-        dest = advisories_dir / name
-        code = download_to_path(f"{base_url}/{name}", dest, username, token)
-        if code != 200 or not dest.is_file() or dest.stat().st_size == 0:
-            dest.unlink(missing_ok=True)
-            return name, False
-        if cache_dir:
-            adv_cache = cache_dir / "advisories"
-            adv_cache.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(dest, adv_cache / name)
-            (adv_cache / f"{name}.sha").write_text(checksums[name] + "\n", encoding="utf-8")
-        return name, True
-
-    if need_fetch:
-        for name, ok in map_threaded(
-            need_fetch,
-            work,
-            max_workers=jobs,
-            cancel_on=HttpAuthError,
-        ):
-            if not ok:
-                failures.append(name)
-
-    ok_files = list(advisories_dir.glob("*.json"))
-    return len(ok_files), len(failures)
-
-
-def collect_match_lines(
-    advisories_dir: Path,
-    bumps_file: Path,
-    *,
     cache_dir: Path | None,
-    manifest_id: str,
+    ttl: int,
     verbose: bool,
-) -> list[str]:
-    if verbose:
-        ok_count = len(list(advisories_dir.glob("*.json")))
-        print(f"Matching bumps against {ok_count} advisories", file=sys.stderr)
-
-    bumps = load_bumps(bumps_file)
-    if not bumps:
-        return []
-
-    index_cache = (cache_dir / "package-index.json") if cache_dir else None
-    index = matcher.load_or_build_index(advisories_dir, index_cache, manifest_id)
-    advisories, parse_errors = matcher.load_advisories_for_bumps(advisories_dir, bumps, index)
-    if parse_errors:
-        print(f"PARSE_ERRORS: {parse_errors}", file=sys.stderr)
-    lines = matcher.match_bumps(bumps, advisories)
-    if not lines:
-        print("NO_MATCHING_ADVISORIES", file=sys.stderr)
-    return lines
+) -> list[dict[str, Any]]:
+    package = f"{group_id}:{artifact_id}"
+    path = _cache_path(cache_dir, package) if cache_dir is not None else None
+    if path is not None:
+        cached = _read_cached(path, ttl)
+        if cached is not None:
+            if verbose:
+                print(f"Advisory cache hit {package}", file=sys.stderr)
+            return cached
+    try:
+        rows = list_advisories(group_id, artifact_id, username, token)
+    except HttpAuthError, TermsRequiredError:
+        raise
+    except ApiError as exc:
+        raise RuntimeError(f"ADVISORY_FETCH_FAILED: {exc}") from exc
+    if path is not None:
+        _write_cached(path, rows)
+    return rows
 
 
 def fetch_osv_lines_for_bumps(
@@ -254,7 +175,8 @@ def fetch_osv_lines_for_bumps(
 ) -> list[str]:
     """Library entry: return OSV match lines for version bumps.
 
-    Raises HttpAuthError on 401/403. Raises RuntimeError on fetch/matcher failure.
+    Raises HttpAuthError on 401/403. Raises TermsRequiredError when terms block
+    the API. Raises RuntimeError on other fetch failures.
     """
     if not bumps:
         return []
@@ -270,68 +192,48 @@ def fetch_osv_lines_for_bumps(
     if ttl < 0:
         raise RuntimeError("LIGHTWELL_OSV_CACHE_TTL must be >= 0")
 
+    packages: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for group_id, artifact_id, from_ver, to_ver in bumps:
+        if from_ver == to_ver:
+            continue
+        package = f"{group_id}:{artifact_id}"
+        if package in seen:
+            continue
+        seen.add(package)
+        packages.append((group_id, artifact_id))
+    if not packages:
+        return []
+
     cache_dir = osv_cache_root(no_cache=no_cache)
-    base_url = OSV_REMEDIATED_BASE
+    if verbose:
+        print(f"Advisories: {len(packages)} package(s) (jobs={jobs})", file=sys.stderr)
 
-    with tempfile.TemporaryDirectory(prefix="lightwell-osv-") as tmp:
-        work = Path(tmp)
-        bumps_file = work / "bumps.txt"
-        bumps_file.write_text(
-            "".join(f"{g}:{a} {frm} {to}\n" for g, a, frm, to in bumps),
-            encoding="utf-8",
-        )
-
-        manifest = load_manifest(
+    def work(_idx: int, item: tuple[str, str]) -> list[dict[str, Any]]:
+        group_id, artifact_id = item
+        return _load_package_advisories(
+            group_id,
+            artifact_id,
+            username=user,
+            token=tok,
             cache_dir=cache_dir,
             ttl=ttl,
-            username=user,
-            token=tok,
             verbose=verbose,
         )
-        entries = parse_manifest(manifest)
-        if not entries:
-            raise RuntimeError("MANIFEST_EMPTY")
 
-        checksums = dict(entries)
-        names = [n for n, _ in entries]
-        manifest_id = hashlib.sha256(manifest.encode("utf-8")).hexdigest()
-
-        if cache_dir:
-            names = filter_names_via_index(
-                names,
-                cache_dir=cache_dir,
-                manifest_id=manifest_id,
-                bumps_file=bumps_file,
-                verbose=verbose,
-            )
-
-        ok_count, fail_count = fetch_advisories(
-            names,
-            checksums,
-            base_url=base_url,
-            work_dir=work,
-            cache_dir=cache_dir,
-            username=user,
-            token=tok,
-            jobs=jobs,
-            verbose=verbose,
-        )
-        total = len(names)
-        if ok_count == 0:
-            raise RuntimeError(f"DOWNLOADS_FAILED: 0/{total} advisories fetched")
-        if fail_count > 0:
-            print(
-                f"DOWNLOADS_PARTIAL: {fail_count}/{total} advisories failed",
-                file=sys.stderr,
-            )
-
-        return collect_match_lines(
-            work / "advisories",
-            bumps_file,
-            cache_dir=cache_dir,
-            manifest_id=manifest_id,
-            verbose=verbose,
-        )
+    fetched = map_threaded(
+        packages,
+        work,
+        max_workers=jobs,
+        cancel_on=(HttpAuthError, TermsRequiredError),
+    )
+    by_package = {
+        f"{group_id}:{artifact_id}": rows for (group_id, artifact_id), rows in zip(packages, fetched, strict=True)
+    }
+    lines = match_lines_for_advisories(bumps, by_package)
+    if not lines:
+        print("NO_MATCHING_ADVISORIES", file=sys.stderr)
+    return lines
 
 
 def main() -> int:
@@ -355,9 +257,9 @@ def main() -> int:
 
     bumps: list[tuple[str, str, str, str]] = []
     coords = list(args.coords)
-    for i in range(0, len(coords), 4):
-        g, a, frm, to = coords[i : i + 4]
-        bumps.append((g, a, frm, to))
+    for index in range(0, len(coords), 4):
+        group_id, artifact_id, from_ver, to_ver = coords[index : index + 4]
+        bumps.append((group_id, artifact_id, from_ver, to_ver))
 
     try:
         lines = fetch_osv_lines_for_bumps(
@@ -368,7 +270,7 @@ def main() -> int:
     except HttpAuthError as exc:
         print(str(exc), file=sys.stderr)
         return 1
-    except RuntimeError as exc:
+    except (TermsRequiredError, RuntimeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
